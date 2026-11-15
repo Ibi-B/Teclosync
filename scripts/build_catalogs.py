@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from typing import Any
 
 import aiohttp
@@ -13,8 +18,6 @@ from scripts.cloudstream import FetchJson, collect_cloudstream
 from scripts.common import atomic_write_json, fetch_json as default_fetch_json, fetch_telegram_page as default_fetch_telegram_page, iso_now, new_catalog_version, read_config, write_json
 from scripts.telegram import FetchPage, collect_telegram
 from scripts.validate_catalog import validate_version
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _write_cloudstream(output_dir: Path, version: str, result: dict[str, Any]) -> None:
