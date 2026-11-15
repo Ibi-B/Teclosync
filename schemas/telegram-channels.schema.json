@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["username", "title", "handle", "description", "postCount", "contentPath", "fetchedAt", "collectionStatus"],
+    "properties": {
+      "username": {"type": "string", "minLength": 1},
+      "title": {"type": "string"},
+      "handle": {"type": "string"},
+      "description": {"type": "string"},
+      "subscribers": {"type": ["string", "null"]},
+      "avatarUrl": {"type": ["string", "null"]},
+      "postCount": {"type": "integer", "minimum": 0},
+      "newestPostId": {"type": ["string", "null"]},
+      "oldestPostId": {"type": ["string", "null"]},
+      "contentPath": {"type": "string", "minLength": 1},
+      "fetchedAt": {"type": "string", "format": "date-time"},
+      "collectionStatus": {"enum": ["complete", "error"]},
+      "error": {"type": "string"}
+    },
+    "additionalProperties": false
+  }
+}

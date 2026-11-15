@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["key", "name", "url", "pluginLists", "fetchedAt", "pluginCount"],
+    "properties": {
+      "key": {"type": "string", "minLength": 1},
+      "name": {"type": "string", "minLength": 1},
+      "url": {"type": "string", "format": "uri"},
+      "description": {"type": ["string", "null"]},
+      "websiteUrl": {"type": ["string", "null"]},
+      "iconUrl": {"type": ["string", "null"]},
+      "pluginLists": {"type": "array", "items": {"type": "string", "format": "uri"}},
+      "fetchedAt": {"type": "string", "format": "date-time"},
+      "pluginCount": {"type": "integer", "minimum": 0}
+    },
+    "additionalProperties": false
+  }
+}

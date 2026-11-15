@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schemaVersion", "version", "generatedAt", "counts", "files", "warnings"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "version": {"type": "string", "minLength": 1},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "counts": {
+      "type": "object",
+      "required": ["channels", "posts"],
+      "properties": {"channels": {"type": "integer", "minimum": 0}, "posts": {"type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    },
+    "files": {"type": "object", "required": ["channels"], "properties": {"channels": {"const": "channels.json"}}, "additionalProperties": false},
+    "warnings": {"type": "array", "items": {"type": "object", "required": ["source", "message"], "properties": {"source": {"type": "string"}, "message": {"type": "string"}}, "additionalProperties": false}}
+  },
+  "additionalProperties": false
+}

@@ -1,4 +1,4 @@
-name: Refresh video catalog
+name: Refresh CloudStream and Telegram catalogues
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: teclosync-pages
   cancel-in-progress: false
 
 jobs:
@@ -22,9 +22,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+      - uses: actions/configure-pages@v5
       - run: pip install -r requirements.txt
-      - run: python scripts/build_video_catalog.py
-      - run: python scripts/validate_catalog.py
+      - name: Build both catalogues
+        run: python scripts/build_catalogs.py
+      - name: Validate published pointers and files
+        run: python scripts/validate_catalog.py
       - uses: actions/upload-pages-artifact@v3
         with:
           path: output

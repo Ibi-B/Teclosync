@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["username", "title", "handle", "posts", "postCount", "fetchedAt"],
+  "properties": {
+    "username": {"type": "string", "minLength": 1},
+    "title": {"type": "string"},
+    "handle": {"type": "string"},
+    "description": {"type": "string"},
+    "subscribers": {"type": ["string", "null"]},
+    "avatarUrl": {"type": ["string", "null"]},
+    "pageUrl": {"type": ["string", "null"]},
+    "posts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["postId", "postUrl", "text", "media"],
+        "properties": {
+          "postId": {"type": "string", "minLength": 1},
+          "postUrl": {"type": "string", "format": "uri"},
+          "publishedAt": {"type": ["string", "null"]},
+          "text": {"type": "string"},
+          "textHtml": {"type": "string"},
+          "views": {"type": ["string", "null"]},
+          "media": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type", "postUrl"],
+              "properties": {
+                "type": {"enum": ["photo", "video", "audio", "document"]},
+                "url": {"type": ["string", "null"]},
+                "previewUrl": {"type": ["string", "null"]},
+                "title": {"type": ["string", "null"]},
+                "postUrl": {"type": "string", "format": "uri"}
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "postCount": {"type": "integer", "minimum": 0},
+    "fetchedAt": {"type": "string", "format": "date-time"},
+    "collectionStatus": {"enum": ["complete", "error"]},
+    "error": {"type": "string"}
+  },
+  "additionalProperties": false
+}

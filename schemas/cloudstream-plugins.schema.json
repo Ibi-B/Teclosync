@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["repositoryKey", "repositoryName", "name", "internalName", "url", "status", "version", "apiVersion", "authors", "tvTypes", "sourceUrl"],
+    "properties": {
+      "repositoryKey": {"type": "string", "minLength": 1},
+      "repositoryName": {"type": "string", "minLength": 1},
+      "name": {"type": "string", "minLength": 1},
+      "internalName": {"type": "string", "minLength": 1},
+      "url": {"type": "string", "format": "uri"},
+      "status": {"type": "integer"},
+      "version": {"type": "integer", "minimum": 0},
+      "apiVersion": {"type": "integer", "minimum": 0},
+      "authors": {"type": "array", "items": {"type": "string"}},
+      "description": {"type": ["string", "null"]},
+      "repositoryUrl": {"type": ["string", "null"]},
+      "tvTypes": {"type": "array", "items": {"type": "string"}},
+      "language": {"type": ["string", "null"]},
+      "iconUrl": {"type": ["string", "null"]},
+      "fileSize": {"type": ["integer", "null"], "minimum": 0},
+      "sourceUrl": {"type": "string", "format": "uri"}
+    },
+    "additionalProperties": false
+  }
+}
