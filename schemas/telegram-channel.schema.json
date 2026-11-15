@@ -10,6 +10,8 @@
     "subscribers": {"type": ["string", "null"]},
     "avatarUrl": {"type": ["string", "null"]},
     "pageUrl": {"type": ["string", "null"]},
+    "oldestPostId": {"type": ["string", "null"]},
+    "newestPostId": {"type": ["string", "null"]},
     "posts": {
       "type": "array",
       "items": {
