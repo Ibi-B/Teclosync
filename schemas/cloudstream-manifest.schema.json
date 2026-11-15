@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schemaVersion", "version", "generatedAt", "counts", "files", "warnings"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "version": {"type": "string", "minLength": 1},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "counts": {
+      "type": "object",
+      "required": ["repositories", "plugins"],
+      "properties": {"repositories": {"type": "integer", "minimum": 0}, "plugins": {"type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    },
+    "files": {
+      "type": "object",
+      "required": ["repositories", "plugins"],
+      "properties": {"repositories": {"const": "repositories.json"}, "plugins": {"const": "plugins.json"}},
+      "additionalProperties": false
+    },
+    "warnings": {"type": "array", "items": {"$ref": "#/$defs/warning"}}
+  },
+  "$defs": {"warning": {"type": "object", "required": ["source", "message"], "properties": {"source": {"type": "string"}, "message": {"type": "string"}}, "additionalProperties": false}},
+  "additionalProperties": false
+}
