@@ -43,10 +43,27 @@ CREATE TABLE IF NOT EXISTS channels (
   PRIMARY KEY (source_id, channel_key),
   FOREIGN KEY (source_id, source_run_id) REFERENCES source_runs(source_id, run_id)
 );
+CREATE TABLE IF NOT EXISTS programmes (
+  programme_key TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_run_id TEXT NOT NULL,
+  source_record_index INTEGER NOT NULL,
+  channel_id TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  stop_time TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  provenance_json TEXT NOT NULL,
+  PRIMARY KEY (source_id, programme_key),
+  FOREIGN KEY (source_id, source_run_id) REFERENCES source_runs(source_id, run_id)
+);
 CREATE INDEX IF NOT EXISTS idx_channels_source ON channels(source_id);
 CREATE INDEX IF NOT EXISTS idx_channels_tvg_id ON channels(tvg_id);
 CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name);
 CREATE INDEX IF NOT EXISTS idx_channels_stream ON channels(stream_url);
+CREATE INDEX IF NOT EXISTS idx_programmes_source ON programmes(source_id);
+CREATE INDEX IF NOT EXISTS idx_programmes_channel ON programmes(channel_id);
+CREATE INDEX IF NOT EXISTS idx_programmes_start ON programmes(start_time);
 """
 
 class StagingDatabase:
@@ -79,6 +96,18 @@ class StagingDatabase:
                 connection.rollback()
                 raise
 
+    def replace_source_programmes(self, source_id, run_id, records):
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            try:
+                connection.execute('DELETE FROM programmes WHERE source_id = ?', (source_id,))
+                connection.executemany('''INSERT INTO programmes (programme_key, source_id, source_run_id, source_record_index, channel_id, start_time, stop_time, title, description, provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', [(record['programme_key'], record['source_id'], record['source_run_id'], record['source_record_index'], record['channel_id'], record['start_time'], record['stop_time'], record['title'], record['description'], json.dumps(record['provenance'], sort_keys=True)) for record in records])
+                connection.execute('UPDATE source_runs SET status = ?, record_count = ? WHERE source_id = ? AND run_id = ?', ('complete', len(records), source_id, run_id))
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
     def fail_source_run(self, source_id, run_id, status='failed'):
         with closing(sqlite3.connect(self.path)) as connection:
             connection.execute('UPDATE source_runs SET status = ? WHERE source_id = ? AND run_id = ?', (status, source_id, run_id))
@@ -88,6 +117,14 @@ class StagingDatabase:
         with closing(sqlite3.connect(self.path)) as connection:
             return connection.execute('SELECT COUNT(*) FROM channels WHERE source_id = ?', (source_id,)).fetchone()[0]
 
+    def source_programme_count(self, source_id):
+        with closing(sqlite3.connect(self.path)) as connection:
+            return connection.execute('SELECT COUNT(*) FROM programmes WHERE source_id = ?', (source_id,)).fetchone()[0]
+
     def channel_count(self):
         with closing(sqlite3.connect(self.path)) as connection:
             return connection.execute('SELECT COUNT(*) FROM channels').fetchone()[0]
+
+    def programme_count(self):
+        with closing(sqlite3.connect(self.path)) as connection:
+            return connection.execute('SELECT COUNT(*) FROM programmes').fetchone()[0]
