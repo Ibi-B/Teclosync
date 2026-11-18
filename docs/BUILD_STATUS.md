@@ -1,12 +1,7 @@
 # Teclosync implementation status
 
-Slice 2 adds the complete candidate source inventory and streaming M3U parser/normalizer. No source is enabled; all are candidates pending validation. Original URLs and query parameters are preserved. Movie and series playlists are classified as live-channel sources, not on-demand VOD.
+Slices 1–10 are implemented: source registry, M3U ingestion, SQLite staging, bounded refresh, validation, XMLTV EPG, artifact builder, verified R2-compatible storage, retention-aware rotation, and controlled workflows.
 
-Run:
+The refresh workflow is manual-only. No production schedule, R2 lifecycle rule, or automatic source discovery is enabled.
 
-```sh
-python -m teclosync validate-config
-python -m unittest discover -s tests -v
-```
-
-Remaining: HTTP ingestion, SQLite staging, refresh/failure isolation, coverage reporting, XMLTV, artifact generation, verified object storage, transactional publication, rotation tests, and controlled live validation.
+Remaining: end-to-end integration tests and controlled live R2 validation.
