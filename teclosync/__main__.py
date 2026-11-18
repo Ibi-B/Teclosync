@@ -20,11 +20,45 @@ def write_diagnostics(path, payload):
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
+def source_freshness(database, sources, refresh_result):
+    results = {item['source_id']: item for item in refresh_result['sources']}
+    statuses = []
+    for source in sources:
+        result = results.get(source['id'], {'status': 'missing', 'reason': 'missing_result'})
+        count = database.source_channel_count(source['id'])
+        if result['status'] == 'healthy':
+            data_state = 'fresh'
+        elif count > 0:
+            data_state = 'retained_last_good'
+        else:
+            data_state = 'unavailable'
+        statuses.append({
+            'source_id': source['id'],
+            'status': result['status'],
+            'data_state': data_state,
+            'channel_count': count,
+            'reason': result.get('reason'),
+        })
+    return statuses
+
+
 def run_refresh(args):
     started_at = datetime.now(timezone.utc)
     run_id = started_at.strftime('%Y%m%dT%H%M%SZ')
     sources = load_sources(args.config)
     enabled_sources = [source for source in sources if source.get('enabled', False)]
+    store = None
+    restored = False
+    if args.publish:
+        store = SnapshotStore(
+            bucket=os.environ['TECLOSYNC_S3_BUCKET'],
+            endpoint_url=os.environ['TECLOSYNC_S3_ENDPOINT'],
+            access_key_id=os.environ['TECLOSYNC_S3_ACCESS_KEY_ID'],
+            secret_access_key=os.environ['TECLOSYNC_S3_SECRET_ACCESS_KEY'],
+            prefix=os.environ.get('TECLOSYNC_S3_PREFIX', 'telclosync/state'),
+            region=os.environ.get('TECLOSYNC_S3_REGION', 'auto'),
+        )
+        restored = store.download_state_database(args.database)
     database = StagingDatabase(args.database)
     for source in enabled_sources:
         database.register_source(source)
@@ -35,6 +69,7 @@ def run_refresh(args):
         'started_at': started_at.isoformat(),
         'publish_requested': args.publish,
         'publish_succeeded': False,
+        'last_good_restored': restored,
         'sources': refresh_result['sources'],
     }
     try:
@@ -42,30 +77,32 @@ def run_refresh(args):
         diagnostics['validation'] = validation_report
         if not validation_report['publication_allowed']:
             raise ValidationError('publication_not_allowed')
-        manifest = build_artifacts(database, args.output, run_id)
+        statuses = source_freshness(database, enabled_sources, refresh_result)
+        diagnostics['source_freshness'] = statuses
+        manifest = build_artifacts(database, args.output, run_id, source_status=statuses)
         diagnostics['artifacts'] = manifest['artifacts']
         if args.publish:
-            store = SnapshotStore(
-                bucket=os.environ['TECLOSYNC_S3_BUCKET'],
-                endpoint_url=os.environ['TECLOSYNC_S3_ENDPOINT'],
-                access_key_id=os.environ['TECLOSYNC_S3_ACCESS_KEY_ID'],
-                secret_access_key=os.environ['TECLOSYNC_S3_SECRET_ACCESS_KEY'],
-                prefix=os.environ.get('TECLOSYNC_S3_PREFIX', 'telclosync/state'),
-                region=os.environ.get('TECLOSYNC_S3_REGION', 'auto'),
-            )
-            output = Path(args.output)
-            uploaded = []
-            for artifact in manifest['artifacts']:
-                local_path = output / artifact['path']
-                key = store.upload_verified(local_path, f"current/{artifact['path']}", artifact['sha256'])
-                uploaded.append({'artifact': artifact['id'], 'key': key})
-            manifest_key = store.publish_manifest(manifest, run_id)
+            manifest_key = store.publish_release(manifest, run_id, args.output)
+            previous_pointer = store.read_pointer('current.json')
+            if previous_pointer:
+                store.write_pointer('previous.json', previous_pointer)
+            state_key = store.upload_state_database(args.database)
+            current_pointer = {
+                'run_id': run_id,
+                'manifest_key': manifest_key,
+            }
+            store.write_pointer('current.json', current_pointer)
             diagnostics['publish_succeeded'] = True
-            diagnostics['uploaded'] = uploaded
             diagnostics['manifest_key'] = manifest_key
+            diagnostics['current_pointer'] = current_pointer
+            diagnostics['state_key'] = state_key
         diagnostics['completed_at'] = datetime.now(timezone.utc).isoformat()
         write_diagnostics(Path(args.diagnostics) / f'refresh-{run_id}.json', diagnostics)
-        print(json.dumps({'run_id': run_id, 'healthy_sources': len(validation_report['healthy_sources']), 'published': args.publish and diagnostics['publish_succeeded']}))
+        print(json.dumps({
+            'run_id': run_id,
+            'healthy_sources': len(validation_report['healthy_sources']),
+            'published': args.publish and diagnostics['publish_succeeded'],
+        }))
         return 0
     except (BuildError, ExternalStateError, ValidationError, RuntimeError, KeyError, OSError) as error:
         diagnostics['completed_at'] = datetime.now(timezone.utc).isoformat()
@@ -93,7 +130,11 @@ def main():
     if args.command == 'list-sources':
         print(json.dumps(sources, indent=2, ensure_ascii=False))
     else:
-        print(json.dumps({'valid': True, 'sources': len(sources), 'enabled': sum(source.get('enabled', False) for source in sources)}))
+        print(json.dumps({
+            'valid': True,
+            'sources': len(sources),
+            'enabled': sum(source.get('enabled', False) for source in sources),
+        }))
 
 
 if __name__ == '__main__':
