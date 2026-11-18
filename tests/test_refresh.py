@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from teclosync.refresh import refresh_source, refresh_sources
+from teclosync.refresh import ingest_m3u, refresh_source, refresh_sources
 from teclosync.staging import StagingDatabase
 
 
@@ -21,11 +21,12 @@ class RefreshTests(unittest.TestCase):
             'timeout_seconds': 5,
         }
 
-    def run(self, sources, m3u):
+    def run_refresh_fixture(self, sources, m3u):
         with tempfile.TemporaryDirectory() as directory:
             database = StagingDatabase(Path(directory) / 'state.db')
             for source in sources:
                 database.register_source(source)
+                database.begin_source_run(source['id'], 'run-1', '2026-01-01T00:00:00Z')
 
             async def fake_fetch(session, source):
                 return m3u
@@ -38,7 +39,7 @@ class RefreshTests(unittest.TestCase):
 
     def test_successful_refresh_stages_channels(self):
         m3u = '#EXTM3U\n#EXTINF:-1,Test\nhttps://example.org/stream\n'
-        database, result = self.run([self.source()], m3u)
+        database, result = self.run_refresh_fixture([self.source()], m3u)
         self.assertEqual(result['sources'][0]['status'], 'healthy')
         self.assertEqual(database.source_channel_count('test-source'), 1)
 
@@ -50,7 +51,7 @@ class RefreshTests(unittest.TestCase):
             '#EXTINF:-1 tvg-id="test.id",Same Channel\n'
             'https://example.org/stream\n'
         )
-        database, result = self.run([self.source()], m3u)
+        database, result = self.run_refresh_fixture([self.source()], m3u)
         source_result = result['sources'][0]
 
         self.assertEqual(source_result['status'], 'healthy')
@@ -60,6 +61,55 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(database.source_channel_count('test-source'), 1)
         duplicate = list(database.iter_channel_duplicates('test-source'))[0]
         self.assertEqual(duplicate['provenance']['source_record_index'], 2)
+
+    def test_duplicate_rows_do_not_replace_last_good_when_unique_count_is_low(self):
+        source = self.source()
+        source['min_records'] = 2
+        good_m3u = (
+            '#EXTM3U\n'
+            '#EXTINF:-1,Known One\nhttps://example.org/known-one\n'
+            '#EXTINF:-1,Known Two\nhttps://example.org/known-two\n'
+        )
+        duplicate_m3u = (
+            '#EXTM3U\n'
+            '#EXTINF:-1 tvg-id="same.id",Repeated\nhttps://example.org/repeated\n'
+            '#EXTINF:-1 tvg-id="same.id",Repeated\nhttps://example.org/repeated\n'
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = StagingDatabase(Path(directory) / 'state.db')
+            database.register_source(source)
+            database.begin_source_run('test-source', 'run-1', '2026-01-01T00:00:00Z')
+            good_records = ingest_m3u(source, source['url'], good_m3u, 'run-1')
+            database.replace_source_channels('test-source', 'run-1', good_records)
+            database.begin_source_run('test-source', 'run-2', '2026-01-02T00:00:00Z')
+
+            async def fake_fetch(session, source):
+                return duplicate_m3u
+
+            with patch('teclosync.refresh.fetch_text', side_effect=fake_fetch):
+                result = asyncio.run(
+                    refresh_source(
+                        MagicMock(),
+                        database,
+                        source,
+                        'run-2',
+                        '2026-01-02T00:00:00Z',
+                    )
+                )
+
+            self.assertEqual(result['status'], 'failed')
+            self.assertEqual(result['reason'], 'record_count_1_below_minimum_2')
+            self.assertEqual(result['source_record_count'], 2)
+            self.assertEqual(result['duplicate_count'], 1)
+            self.assertEqual(database.source_channel_count('test-source'), 2)
+            self.assertEqual(
+                {record['stream_url'] for record in database.iter_channels()},
+                {
+                    'https://example.org/known-one',
+                    'https://example.org/known-two',
+                },
+            )
 
     def test_failed_refresh_preserves_channels(self):
         source = self.source()
@@ -100,7 +150,7 @@ class RefreshTests(unittest.TestCase):
             self.assertEqual(database.source_channel_count('test-source'), 1)
 
     def test_empty_source_below_threshold_fails(self):
-        database, result = self.run([self.source()], '#EXTM3U\n')
+        database, result = self.run_refresh_fixture([self.source()], '#EXTM3U\n')
         self.assertEqual(result['sources'][0]['status'], 'failed')
         self.assertEqual(database.source_channel_count('test-source'), 0)
 
@@ -126,6 +176,11 @@ class RefreshTests(unittest.TestCase):
 
     def test_sqlite_error_contains_constraint_detail(self):
         database = MagicMock()
+        database.summarize_source_channels.return_value = {
+            'record_count': 1,
+            'source_record_count': 1,
+            'duplicate_count': 0,
+        }
         database.replace_source_channels.side_effect = sqlite3.IntegrityError(
             'UNIQUE constraint failed: channels.source_id, channels.channel_key'
         )
