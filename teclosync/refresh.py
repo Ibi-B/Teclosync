@@ -79,6 +79,7 @@ async def refresh_source(session, database, source, run_id, started_at):
         records = ingest_m3u(source, source['url'], text, run_id)
         summary = database.summarize_source_channels(source['id'], records)
         if summary['record_count'] < source['min_records']:
+            database.record_source_duplicates(source['id'], run_id, records)
             raise SourceRefreshError(
                 source['id'],
                 f'record_count_{summary["record_count"]}_below_minimum_{source["min_records"]}',
