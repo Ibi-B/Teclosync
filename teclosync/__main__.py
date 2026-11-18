@@ -42,12 +42,33 @@ def source_freshness(database, sources, refresh_result):
     return statuses
 
 
+def publish_current_pointer(store, current_pointer, previous_pointer=None):
+    if previous_pointer:
+        store.write_pointer('previous.json', previous_pointer)
+
+    try:
+        store.write_pointer('current.json', current_pointer)
+    except Exception as publication_error:
+        if previous_pointer:
+            try:
+                # A failed read-back can occur after the object-store PUT has
+                # committed. Restore the last-known-good pointer before returning.
+                store.write_pointer('current.json', previous_pointer)
+            except Exception as rollback_error:
+                raise ExternalStateError(
+                    'current_pointer_update_failed_and_rollback_failed: '
+                    f'{publication_error}; {rollback_error}'
+                ) from rollback_error
+        raise
+
+
 def run_refresh(args):
     started_at = datetime.now(timezone.utc)
     run_id = started_at.strftime('%Y%m%dT%H%M%SZ')
     sources = load_sources(args.config)
     enabled_sources = [source for source in sources if source.get('enabled', False)]
     store = None
+    previous_pointer = None
     restored = False
     if args.publish:
         store = SnapshotStore(
@@ -58,7 +79,13 @@ def run_refresh(args):
             prefix=os.environ.get('TECLOSYNC_S3_PREFIX', 'telclosync/state'),
             region=os.environ.get('TECLOSYNC_S3_REGION', 'auto'),
         )
-        restored = store.download_state_database(args.database)
+        previous_pointer = store.read_pointer('current.json')
+        state_key = (
+            previous_pointer.get('state_key')
+            if isinstance(previous_pointer, dict)
+            else None
+        )
+        restored = store.download_state_database(args.database, key=state_key)
     database = StagingDatabase(args.database)
     for source in enabled_sources:
         database.register_source(source)
@@ -83,15 +110,13 @@ def run_refresh(args):
         diagnostics['artifacts'] = manifest['artifacts']
         if args.publish:
             manifest_key = store.publish_release(manifest, run_id, args.output)
-            previous_pointer = store.read_pointer('current.json')
-            if previous_pointer:
-                store.write_pointer('previous.json', previous_pointer)
-            state_key = store.upload_state_database(args.database)
+            state_key = store.upload_state_database(args.database, run_id=run_id)
             current_pointer = {
                 'run_id': run_id,
                 'manifest_key': manifest_key,
+                'state_key': state_key,
             }
-            store.write_pointer('current.json', current_pointer)
+            publish_current_pointer(store, current_pointer, previous_pointer)
             diagnostics['publish_succeeded'] = True
             diagnostics['manifest_key'] = manifest_key
             diagnostics['current_pointer'] = current_pointer
@@ -104,7 +129,7 @@ def run_refresh(args):
             'published': args.publish and diagnostics['publish_succeeded'],
         }))
         return 0
-    except (BuildError, ExternalStateError, ValidationError, RuntimeError, KeyError, OSError) as error:
+    except Exception as error:
         diagnostics['completed_at'] = datetime.now(timezone.utc).isoformat()
         diagnostics['error'] = f'{type(error).__name__}: {error}'
         write_diagnostics(Path(args.diagnostics) / f'refresh-{run_id}.json', diagnostics)
