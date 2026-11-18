@@ -199,7 +199,7 @@ class CliIntegrationTest(unittest.TestCase):
                 diagnostic_files[0].read_text(encoding='utf-8')
             )
             self.assertFalse(payload['publish_succeeded'])
-            self.assertIn('publication_not_allowed', payload['error'])
+            self.assertIn('global_source_collapse', payload['error'])
 
 
 if __name__ == '__main__':
