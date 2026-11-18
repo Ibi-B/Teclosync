@@ -40,6 +40,43 @@ class ExternalStateTests(unittest.TestCase):
             key = store.upload_verified(path, 'current/artifact.m3u8', digest)
             self.assertEqual(key, 'telclosync/state/current/artifact.m3u8')
 
+    def test_state_database_upload_uses_immutable_run_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.db'
+            content = b'sqlite-state-snapshot'
+            path.write_bytes(content)
+            store = self.store()
+            store.client.get_object.return_value = {'Body': io.BytesIO(content)}
+
+            key = store.upload_state_database(path, run_id='run-123')
+
+            self.assertEqual(
+                key,
+                'telclosync/state/releases/run-123/teclo-sync.db',
+            )
+            store.client.upload_file.assert_called_once_with(
+                str(path),
+                'test-bucket',
+                key,
+            )
+
+    def test_state_database_restore_uses_pointer_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'restored' / 'state.db'
+            content = b'previous-good-sqlite'
+            store = self.store()
+            key = 'telclosync/state/releases/previous-run/teclo-sync.db'
+            store.client.get_object.return_value = {'Body': io.BytesIO(content)}
+
+            restored = store.download_state_database(path, key=key)
+
+            self.assertTrue(restored)
+            self.assertEqual(path.read_bytes(), content)
+            store.client.get_object.assert_called_once_with(
+                Bucket='test-bucket',
+                Key=key,
+            )
+
     def test_manifest_verification_failure(self):
         store = self.store()
         store.client.get_object.return_value = {'Body': io.BytesIO(b'{}')}
