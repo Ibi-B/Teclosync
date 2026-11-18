@@ -13,10 +13,18 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 class SourceRefreshError(Exception):
-    def __init__(self, source_id, reason):
+    def __init__(
+        self,
+        source_id,
+        reason,
+        source_record_count=0,
+        duplicate_count=0,
+    ):
         super().__init__(f'{source_id}: {reason}')
         self.source_id = source_id
         self.reason = reason
+        self.source_record_count = source_record_count
+        self.duplicate_count = duplicate_count
 
 
 async def fetch_text(session, source):
@@ -69,20 +77,33 @@ async def refresh_source(session, database, source, run_id, started_at):
             raise SourceRefreshError(source['id'], 'unsupported_format_for_refresh')
         text = await fetch_text(session, source)
         records = ingest_m3u(source, source['url'], text, run_id)
-        if len(records) < source['min_records']:
+        summary = database.summarize_source_channels(source['id'], records)
+        if summary['record_count'] < source['min_records']:
             raise SourceRefreshError(
                 source['id'],
-                f'record_count_{len(records)}_below_minimum_{source["min_records"]}',
+                f'record_count_{summary["record_count"]}_below_minimum_{source["min_records"]}',
+                source_record_count=summary['source_record_count'],
+                duplicate_count=summary['duplicate_count'],
             )
-        summary = database.replace_source_channels(source['id'], run_id, records)
-        if not isinstance(summary, dict):
-            summary = {}
+        stored_summary = database.replace_source_channels(
+            source['id'],
+            run_id,
+            records,
+        )
+        if not isinstance(stored_summary, dict):
+            stored_summary = summary
         return {
             'source_id': source['id'],
             'status': 'healthy',
-            'record_count': summary.get('record_count', len(records)),
-            'source_record_count': summary.get('source_record_count', len(records)),
-            'duplicate_count': summary.get('duplicate_count', 0),
+            'record_count': stored_summary.get('record_count', summary['record_count']),
+            'source_record_count': stored_summary.get(
+                'source_record_count',
+                summary['source_record_count'],
+            ),
+            'duplicate_count': stored_summary.get(
+                'duplicate_count',
+                summary['duplicate_count'],
+            ),
         }
     except SourceRefreshError as error:
         database.fail_source_run(source['id'], run_id)
@@ -91,6 +112,8 @@ async def refresh_source(session, database, source, run_id, started_at):
             'status': 'failed',
             'reason': error.reason,
             'record_count': 0,
+            'source_record_count': error.source_record_count,
+            'duplicate_count': error.duplicate_count,
         }
     except Exception as error:
         database.fail_source_run(source['id'], run_id)
@@ -99,6 +122,8 @@ async def refresh_source(session, database, source, run_id, started_at):
             'status': 'failed',
             'reason': _diagnostic_reason(error),
             'record_count': 0,
+            'source_record_count': 0,
+            'duplicate_count': 0,
         }
 
 
