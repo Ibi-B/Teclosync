@@ -103,6 +103,7 @@ class RefreshTests(unittest.TestCase):
             self.assertEqual(result['reason'], 'record_count_1_below_minimum_2')
             self.assertEqual(result['source_record_count'], 2)
             self.assertEqual(result['duplicate_count'], 1)
+            self.assertEqual(database.source_duplicate_count('test-source'), 1)
             self.assertEqual(database.source_channel_count('test-source'), 2)
             self.assertEqual(
                 {record['stream_url'] for record in database.iter_channels()},
