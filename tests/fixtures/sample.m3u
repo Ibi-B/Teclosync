@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="example.se" tvg-name="Example TV" group-title="General",Example TV
+https://example.org/live.m3u8?token=keep
+#EXTINF:-1 tvg-id="radio.example" tvg-name="Example Radio" group-title="Radio" radio="true",Example Radio
+https://example.org/radio.mp3
