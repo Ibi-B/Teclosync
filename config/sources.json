@@ -2,7 +2,7 @@
   "version": 1,
   "sources": [
     {"id": "iptv-org-global", "name": "IPTV-Org Global", "category": "live_tv", "format": "m3u", "url": "https://iptv-org.github.io/iptv/index.m3u", "enabled": false, "status": "candidate", "priority": 10, "min_records": 1000, "timeout_seconds": 90, "requires_validation": true},
-    {"id": "iptv-org-sweden", "name": "IPTV-Org Sweden", "category": "live_tv", "region": "se", "format": "m3u", "url": "https://iptv-org.github.io/iptv/countries/se.m3u", "enabled": false, "status": "candidate", "priority": 20, "min_records": 10, "timeout_seconds": 45, "requires_validation": true},
+    {"id": "iptv-org-sweden", "name": "IPTV-Org Sweden", "category": "live_tv", "region": "se", "format": "m3u", "url": "https://iptv-org.github.io/iptv/countries/se.m3u", "enabled": true, "status": "controlled-initial", "priority": 20, "min_records": 10, "timeout_seconds": 45, "requires_validation": true},
     {"id": "iptv-org-movies", "name": "IPTV-Org Movies", "category": "live_tv", "format": "m3u", "url": "https://iptv-org.github.io/iptv/categories/movies.m3u", "enabled": false, "status": "candidate", "priority": 110, "min_records": 100, "timeout_seconds": 60, "requires_validation": true},
     {"id": "iptv-org-series", "name": "IPTV-Org Series", "category": "live_tv", "format": "m3u", "url": "https://iptv-org.github.io/iptv/categories/series.m3u", "enabled": false, "status": "candidate", "priority": 111, "min_records": 50, "timeout_seconds": 60, "requires_validation": true},
     {"id": "iptv-org-classic", "name": "IPTV-Org Classic", "category": "live_tv", "format": "m3u", "url": "https://iptv-org.github.io/iptv/categories/classic.m3u", "enabled": false, "status": "candidate", "priority": 112, "min_records": 20, "timeout_seconds": 60, "requires_validation": true},
@@ -35,7 +35,7 @@
     {"id": "jromero88-vod", "name": "JRomero88 VOD", "category": "vod_movies", "format": "m3u", "url": "https://raw.githubusercontent.com/jromero88/iptv/master/VOD.m3u", "enabled": false, "status": "candidate", "priority": 121, "min_records": 10, "timeout_seconds": 90, "requires_validation": true},
     {"id": "freemoviesplus", "name": "FreeMoviesPlus", "category": "vod_movies", "format": "m3u", "url": "https://www.apsattv.com/freemoviesplus.m3u", "enabled": false, "status": "candidate", "priority": 122, "min_records": 10, "timeout_seconds": 60, "requires_validation": true},
     {"id": "mjh-global-epg", "name": "Matt Huisman Global EPG", "category": "epg", "format": "xmltv_gz", "url": "https://i.mjh.nz/all/epg.xml.gz", "enabled": false, "status": "candidate", "priority": 200, "min_records": 100, "timeout_seconds": 180, "requires_validation": true},
-    {"id": "mjh-new-zealand-epg", "name": "Matt Huisman New Zealand EPG", "category": "epg", "region": "nz", "format": "xmltv_gz", "url": "https://i.mjh.nz/nz/epg.xml.gz", "enabled": false, "status": "candidate", "priority": 201, "min_records": 20, "timeout_seconds": 120, "requires_validation": true},
+    {"id": "mjh-new-zealand-epg", "name": "Matt Huisman New Zealand EPG", "category": "epg", "format": "xmltv_gz", "url": "https://i.mjh.nz/nz/epg.xml.gz", "enabled": false, "status": "candidate", "priority": 201, "min_records": 20, "timeout_seconds": 120, "requires_validation": true},
     {"id": "orphanedfilms-epg", "name": "OrphanedFilms EPG", "category": "epg", "format": "xmltv", "url": "https://orphanedfilms.com/api/tv/guide.xml", "enabled": false, "status": "candidate", "priority": 202, "min_records": 20, "timeout_seconds": 120, "requires_validation": true}
   ]
 }

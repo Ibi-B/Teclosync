@@ -11,6 +11,7 @@ from teclosync.config import load_sources
 from teclosync.external_state import ExternalStateError, SnapshotStore
 from teclosync.refresh import refresh_sources
 from teclosync.staging import StagingDatabase
+from teclosync.validation import ValidationError, validate_refresh
 
 
 def write_diagnostics(path, payload):
@@ -36,10 +37,11 @@ def run_refresh(args):
         'publish_succeeded': False,
         'sources': refresh_result['sources'],
     }
-    healthy = [result for result in refresh_result['sources'] if result['status'] == 'healthy']
     try:
-        if not healthy:
-            raise RuntimeError('no_healthy_sources')
+        validation_report = validate_refresh(database, enabled_sources, refresh_result)
+        diagnostics['validation'] = validation_report
+        if not validation_report['publication_allowed']:
+            raise ValidationError('publication_not_allowed')
         manifest = build_artifacts(database, args.output, run_id)
         diagnostics['artifacts'] = manifest['artifacts']
         if args.publish:
@@ -63,9 +65,9 @@ def run_refresh(args):
             diagnostics['manifest_key'] = manifest_key
         diagnostics['completed_at'] = datetime.now(timezone.utc).isoformat()
         write_diagnostics(Path(args.diagnostics) / f'refresh-{run_id}.json', diagnostics)
-        print(json.dumps({'run_id': run_id, 'healthy_sources': len(healthy), 'published': args.publish and diagnostics['publish_succeeded']}))
+        print(json.dumps({'run_id': run_id, 'healthy_sources': len(validation_report['healthy_sources']), 'published': args.publish and diagnostics['publish_succeeded']}))
         return 0
-    except (BuildError, ExternalStateError, RuntimeError, KeyError, OSError) as error:
+    except (BuildError, ExternalStateError, ValidationError, RuntimeError, KeyError, OSError) as error:
         diagnostics['completed_at'] = datetime.now(timezone.utc).isoformat()
         diagnostics['error'] = f'{type(error).__name__}: {error}'
         write_diagnostics(Path(args.diagnostics) / f'refresh-{run_id}.json', diagnostics)
