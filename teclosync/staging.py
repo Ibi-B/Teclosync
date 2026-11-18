@@ -113,6 +113,16 @@ class StagingDatabase:
             connection.execute('UPDATE source_runs SET status = ? WHERE source_id = ? AND run_id = ?', (status, source_id, run_id))
             connection.commit()
 
+    def iter_channels(self):
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.row_factory = sqlite3.Row
+            for row in connection.execute('SELECT * FROM channels ORDER BY source_id, source_record_index'):
+                record = dict(row)
+                record['radio'] = bool(record['radio'])
+                record['provenance'] = json.loads(record['provenance_json'])
+                del record['provenance_json']
+                yield record
+
     def source_channel_count(self, source_id):
         with closing(sqlite3.connect(self.path)) as connection:
             return connection.execute('SELECT COUNT(*) FROM channels WHERE source_id = ?', (source_id,)).fetchone()[0]
