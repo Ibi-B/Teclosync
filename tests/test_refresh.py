@@ -26,25 +26,29 @@ class RefreshTests(unittest.TestCase):
             database = StagingDatabase(Path(directory) / 'state.db')
             for source in sources:
                 database.register_source(source)
-            with patch('teclosync.refresh.fetch_text', return_value=m3u):
+
+            async def fake_fetch(session, source):
+                return m3u
+
+            with patch('teclosync.refresh.fetch_text', side_effect=fake_fetch):
                 result = asyncio.run(
                     refresh_sources(database, sources, run_id='run-1')
                 )
             return database, result
 
     def test_successful_refresh_stages_channels(self):
-        m3u = '#EXTM3U\\n#EXTINF:-1,Test\\nhttps://example.org/stream\\n'
+        m3u = '#EXTM3U\n#EXTINF:-1,Test\nhttps://example.org/stream\n'
         database, result = self.run([self.source()], m3u)
         self.assertEqual(result['sources'][0]['status'], 'healthy')
         self.assertEqual(database.source_channel_count('test-source'), 1)
 
     def test_exact_duplicates_are_reported_without_losing_provenance(self):
         m3u = (
-            '#EXTM3U\\n'
-            '#EXTINF:-1 tvg-id="test.id",Same Channel\\n'
-            'https://example.org/stream\\n'
-            '#EXTINF:-1 tvg-id="test.id",Same Channel\\n'
-            'https://example.org/stream\\n'
+            '#EXTM3U\n'
+            '#EXTINF:-1 tvg-id="test.id",Same Channel\n'
+            'https://example.org/stream\n'
+            '#EXTINF:-1 tvg-id="test.id",Same Channel\n'
+            'https://example.org/stream\n'
         )
         database, result = self.run([self.source()], m3u)
         source_result = result['sources'][0]
@@ -84,10 +88,11 @@ class RefreshTests(unittest.TestCase):
             }
             database.replace_source_channels('test-source', 'run-1', [record])
             database.begin_source_run('test-source', 'run-2', '2026-01-02T00:00:00Z')
-            with patch(
-                'teclosync.refresh.fetch_text',
-                side_effect=Exception('source temporarily unavailable'),
-            ):
+
+            async def fail_fetch(session, source):
+                raise RuntimeError('source temporarily unavailable')
+
+            with patch('teclosync.refresh.fetch_text', side_effect=fail_fetch):
                 result = asyncio.run(
                     refresh_sources(database, [source], run_id='run-2')
                 )
@@ -95,15 +100,19 @@ class RefreshTests(unittest.TestCase):
             self.assertEqual(database.source_channel_count('test-source'), 1)
 
     def test_empty_source_below_threshold_fails(self):
-        database, result = self.run([self.source()], '#EXTM3U\\n')
+        database, result = self.run([self.source()], '#EXTM3U\n')
         self.assertEqual(result['sources'][0]['status'], 'failed')
         self.assertEqual(database.source_channel_count('test-source'), 0)
 
     def test_parser_error_contains_actionable_detail(self):
         database = MagicMock()
         source = self.source()
-        malformed = '#EXTM3U\\n#EXTINF:-1,Incomplete entry\\n'
-        with patch('teclosync.refresh.fetch_text', return_value=malformed):
+        malformed = '#EXTM3U\n#EXTINF:-1,Incomplete entry\n'
+
+        async def fake_fetch(session, source):
+            return malformed
+
+        with patch('teclosync.refresh.fetch_text', side_effect=fake_fetch):
             result = asyncio.run(
                 refresh_source(MagicMock(), database, source, 'run-1', 'started')
             )
@@ -121,8 +130,12 @@ class RefreshTests(unittest.TestCase):
             'UNIQUE constraint failed: channels.source_id, channels.channel_key'
         )
         source = self.source()
-        m3u = '#EXTM3U\\n#EXTINF:-1,Test\\nhttps://example.org/stream\\n'
-        with patch('teclosync.refresh.fetch_text', return_value=m3u):
+        m3u = '#EXTM3U\n#EXTINF:-1,Test\nhttps://example.org/stream\n'
+
+        async def fake_fetch(session, source):
+            return m3u
+
+        with patch('teclosync.refresh.fetch_text', side_effect=fake_fetch):
             result = asyncio.run(
                 refresh_source(MagicMock(), database, source, 'run-1', 'started')
             )
