@@ -1,8 +1,10 @@
+import re
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from teclosync.staging import StagingDatabase
+from teclosync.staging import SCHEMA, StagingDatabase
 
 
 class StagingTests(unittest.TestCase):
@@ -162,6 +164,78 @@ class StagingTests(unittest.TestCase):
 
             self.assertEqual(database.source_channel_count('test-source'), 1)
             self.assertEqual(list(database.iter_channels())[0]['name'], 'Channel 1')
+
+
+    def test_metadata_variants_with_same_name_and_url_are_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = self.setup_database(directory)
+            first = dict(
+                self.record(1),
+                name='Same Station',
+                tvg_id='station-id-one',
+                stream_url='https://example.org/shared-stream',
+                original_stream_url='https://example.org/shared-stream',
+            )
+            alternative_metadata = dict(
+                first,
+                channel_key='key-metadata-variant',
+                source_record_index=2,
+                tvg_id='station-id-two',
+                provenance={
+                    **first['provenance'],
+                    'source_record_index': 2,
+                    'content_hash': 'key-metadata-variant',
+                },
+            )
+
+            summary = database.replace_source_channels(
+                'test-source',
+                'run-1',
+                [first, alternative_metadata],
+            )
+
+            self.assertEqual(summary['record_count'], 2)
+            records = list(database.iter_channels())
+            self.assertEqual(len(records), 2)
+            self.assertEqual(
+                {record['tvg_id'] for record in records},
+                {'station-id-one', 'station-id-two'},
+            )
+            self.assertEqual(
+                {record['stream_url'] for record in records},
+                {'https://example.org/shared-stream'},
+            )
+
+    def test_existing_database_receives_duplicate_table_migration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'legacy-state.db'
+            legacy_schema = re.sub(
+                r'CREATE TABLE IF NOT EXISTS channel_duplicates \([\s\S]*?\);\n',
+                '',
+                SCHEMA,
+                count=1,
+            )
+            legacy_schema = legacy_schema.replace(
+                'CREATE INDEX IF NOT EXISTS idx_channel_duplicates_source ON channel_duplicates(source_id);\n',
+                '',
+            )
+            with sqlite3.connect(path) as connection:
+                connection.executescript(legacy_schema)
+
+            with sqlite3.connect(path) as connection:
+                existing = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_duplicates'"
+                ).fetchone()
+            self.assertIsNone(existing)
+
+            StagingDatabase(path)
+
+            with sqlite3.connect(path) as connection:
+                migrated = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_duplicates'"
+                ).fetchone()
+            self.assertEqual(migrated, ('channel_duplicates',))
+
 
 
 if __name__ == '__main__':
