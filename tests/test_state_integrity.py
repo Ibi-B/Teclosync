@@ -33,7 +33,7 @@ class SourceIsolationTest(unittest.TestCase):
         with patch('teclosync.refresh.fetch_text', side_effect=ValueError('malformed playlist')):
             result = asyncio.run(refresh_source(MagicMock(), database, source, 'run-1', 'started'))
         self.assertEqual(result['status'], 'failed')
-        self.assertEqual(result['reason'], 'ValueError')
+        self.assertEqual(result['reason'], 'ValueError: malformed playlist')
         database.fail_source_run.assert_called_once_with('bad-source', 'run-1')
 
 
