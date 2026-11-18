@@ -127,6 +127,18 @@ class CliIntegrationTest(unittest.TestCase):
             self.assertTrue(payload['validation']['publication_allowed'])
             self.assertEqual(payload['validation']['total_channels'], 12)
             self.assertEqual(payload['artifacts'][-1]['record_count'], 12)
+            manifest_payload = json.loads(
+                (output / 'manifest.json').read_text(encoding='utf-8')
+            )
+            self.assertEqual(
+                manifest_payload['sources'][0]['accepted_record_count'],
+                12,
+            )
+            self.assertEqual(
+                manifest_payload['sources'][0]['source_record_count'],
+                12,
+            )
+            self.assertEqual(manifest_payload['sources'][0]['duplicate_count'], 0)
             store.publish_release.assert_called_once()
             store.upload_state_database.assert_called_once_with(
                 str(database_path),
