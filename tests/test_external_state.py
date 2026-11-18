@@ -1,14 +1,23 @@
 import hashlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
+
 from teclosync.external_state import SnapshotStore, ExternalStateError
+
 
 class ExternalStateTests(unittest.TestCase):
     def store(self):
-        store = SnapshotStore('test-bucket', 'https://example.r2.cloudflarestorage.com', 'access', 'secret', prefix='telclosync/state')
+        store = SnapshotStore(
+            'test-bucket',
+            'https://example.r2.cloudflarestorage.com',
+            'access',
+            'secret',
+            prefix='telclosync/state',
+        )
         store.client = MagicMock()
         return store
 
@@ -34,14 +43,31 @@ class ExternalStateTests(unittest.TestCase):
     def test_manifest_verification_failure(self):
         store = self.store()
         store.client.get_object.return_value = {'Body': io.BytesIO(b'{}')}
-        with self.assertRaises(ExternalStateError):
-            store.publish_manifest({'artifacts': []}, 'run-1')
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ExternalStateError):
+                store.publish_release({'artifacts': []}, 'run-1', directory)
 
-    def test_cleanup_only_removes_superseded_archive(self):
+    def test_pointer_write_verifies_exact_payload(self):
         store = self.store()
-        store.object_exists = lambda key: True
-        removed = store.cleanup_superseded({'artifacts': [{'path': 'current.m3u8'}]}, {'artifacts': [{'path': 'old.m3u8'}]})
-        self.assertEqual(removed, ['telclosync/state/archive/old.m3u8'])
+        payload = {'run_id': 'run-1', 'manifest_key': 'releases/run-1/manifest.json'}
+        body = json.dumps(
+            payload,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode('utf-8')
+        store.client.get_object.return_value = {'Body': io.BytesIO(body)}
+
+        key = store.write_pointer('current.json', payload)
+
+        self.assertEqual(key, 'telclosync/state/current.json')
+        store.client.put_object.assert_called_once_with(
+            Bucket='test-bucket',
+            Key='telclosync/state/current.json',
+            Body=body,
+            ContentType='application/json',
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
