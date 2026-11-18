@@ -126,7 +126,8 @@ class StagingDatabase:
             if key not in {'source_run_id', 'source_record_index', 'provenance'}
         }
 
-    def replace_source_channels(self, source_id, run_id, records):
+    @classmethod
+    def _partition_source_channels(cls, source_id, records):
         unique_records = {}
         duplicate_records = []
 
@@ -140,13 +141,32 @@ class StagingDatabase:
             if existing is None:
                 unique_records[channel_key] = record
                 continue
-            if self._channel_payload(existing) != self._channel_payload(record):
+            if cls._channel_payload(existing) != cls._channel_payload(record):
                 raise ValueError(
                     f'channel_key collision for source {source_id!r} '
                     f'at records {existing["source_record_index"]} '
                     f'and {record["source_record_index"]}'
                 )
             duplicate_records.append(record)
+
+        return unique_records, duplicate_records
+
+    def summarize_source_channels(self, source_id, records):
+        unique_records, duplicate_records = self._partition_source_channels(
+            source_id,
+            records,
+        )
+        return {
+            'record_count': len(unique_records),
+            'source_record_count': len(records),
+            'duplicate_count': len(duplicate_records),
+        }
+
+    def replace_source_channels(self, source_id, run_id, records):
+        unique_records, duplicate_records = self._partition_source_channels(
+            source_id,
+            records,
+        )
 
         with closing(sqlite3.connect(self.path)) as connection:
             connection.execute('BEGIN IMMEDIATE')
