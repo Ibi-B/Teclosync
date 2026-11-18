@@ -162,6 +162,39 @@ class StagingDatabase:
             'duplicate_count': len(duplicate_records),
         }
 
+    def record_source_duplicates(self, source_id, run_id, records):
+        _, duplicate_records = self._partition_source_channels(source_id, records)
+        if not duplicate_records:
+            return 0
+
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            try:
+                connection.executemany(
+                    '''INSERT OR REPLACE INTO channel_duplicates (
+                        source_id, source_run_id, source_record_index, channel_key,
+                        reason, record_json, provenance_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    [
+                        (
+                            record['source_id'],
+                            record['source_run_id'],
+                            record['source_record_index'],
+                            record['channel_key'],
+                            'exact_duplicate',
+                            json.dumps(record, sort_keys=True, ensure_ascii=False),
+                            json.dumps(record['provenance'], sort_keys=True, ensure_ascii=False),
+                        )
+                        for record in duplicate_records
+                    ],
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+        return len(duplicate_records)
+
     def replace_source_channels(self, source_id, run_id, records):
         unique_records, duplicate_records = self._partition_source_channels(
             source_id,
@@ -172,10 +205,6 @@ class StagingDatabase:
             connection.execute('BEGIN IMMEDIATE')
             try:
                 connection.execute('DELETE FROM channels WHERE source_id = ?', (source_id,))
-                connection.execute(
-                    'DELETE FROM channel_duplicates WHERE source_id = ?',
-                    (source_id,),
-                )
                 connection.executemany(
                     '''INSERT INTO channels (
                         channel_key, source_id, source_run_id, source_record_index,
@@ -207,7 +236,7 @@ class StagingDatabase:
                     ],
                 )
                 connection.executemany(
-                    '''INSERT INTO channel_duplicates (
+                    '''INSERT OR REPLACE INTO channel_duplicates (
                         source_id, source_run_id, source_record_index, channel_key,
                         reason, record_json, provenance_json
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)''',
