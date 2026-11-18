@@ -42,10 +42,16 @@ class SnapshotStore:
         response = self.client.get_object(Bucket=self.bucket, Key=key)
         return response['Body'].read()
 
-    def download_state_database(self, local_path):
-        key = self.object_key('state/teclo-sync.db')
+    def download_state_database(self, local_path, key=None):
+        if key:
+            prefix = f'{self.prefix}/'
+            object_key = key if key.startswith(prefix) else self.object_key(key)
+        else:
+            # Backward-compatible fallback for state written before release pointers
+            # referenced immutable database snapshots.
+            object_key = self.object_key('state/teclo-sync.db')
         try:
-            payload = self.download_to_bytes(key)
+            payload = self.download_to_bytes(object_key)
         except self.client.exceptions.ClientError as error:
             if self._missing_key(error):
                 return False
@@ -55,10 +61,15 @@ class SnapshotStore:
         path.write_bytes(payload)
         return True
 
-    def upload_state_database(self, local_path):
+    def upload_state_database(self, local_path, run_id=None):
         path = Path(local_path)
         expected = sha256_file(path)
-        key = self.object_key('state/teclo-sync.db')
+        relative_key = (
+            f'releases/{run_id}/teclo-sync.db'
+            if run_id
+            else 'state/teclo-sync.db'
+        )
+        key = self.object_key(relative_key)
         self.client.upload_file(str(path), self.bucket, key)
         downloaded = self.download_to_bytes(key)
         if hashlib.sha256(downloaded).hexdigest() != expected:
