@@ -22,20 +22,21 @@ class RefreshTests(unittest.TestCase):
         }
 
     def run_refresh_fixture(self, sources, m3u):
-        with tempfile.TemporaryDirectory() as directory:
-            database = StagingDatabase(Path(directory) / 'state.db')
-            for source in sources:
-                database.register_source(source)
-                database.begin_source_run(source['id'], 'run-1', '2026-01-01T00:00:00Z')
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        database = StagingDatabase(Path(temporary_directory.name) / 'state.db')
+        for source in sources:
+            database.register_source(source)
+            database.begin_source_run(source['id'], 'run-1', '2026-01-01T00:00:00Z')
 
-            async def fake_fetch(session, source):
-                return m3u
+        async def fake_fetch(session, source):
+            return m3u
 
-            with patch('teclosync.refresh.fetch_text', side_effect=fake_fetch):
-                result = asyncio.run(
-                    refresh_sources(database, sources, run_id='run-1')
-                )
-            return database, result
+        with patch('teclosync.refresh.fetch_text', side_effect=fake_fetch):
+            result = asyncio.run(
+                refresh_sources(database, sources, run_id='run-1')
+            )
+        return database, result
 
     def test_successful_refresh_stages_channels(self):
         m3u = '#EXTM3U\n#EXTINF:-1,Test\nhttps://example.org/stream\n'
