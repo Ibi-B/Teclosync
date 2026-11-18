@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from datetime import datetime, timezone
 
 import aiohttp
@@ -40,7 +41,10 @@ async def fetch_text(session, source):
             last_error = error
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)
-    raise SourceRefreshError(source['id'], type(last_error).__name__ if last_error else 'unknown_error')
+    raise SourceRefreshError(
+        source['id'],
+        type(last_error).__name__ if last_error else 'unknown_error',
+    )
 
 
 def ingest_m3u(source, source_url, text, retrieved_at):
@@ -48,6 +52,15 @@ def ingest_m3u(source, source_url, text, retrieved_at):
         normalize_m3u_entry(entry, source, source_url, retrieved_at)
         for entry in parse_m3u(text.splitlines(), source['id'])
     ]
+
+
+def _diagnostic_reason(error):
+    error_type = type(error).__name__
+    if isinstance(error, (ValueError, sqlite3.Error)):
+        detail = str(error).strip()
+        if detail:
+            return f'{error_type}: {detail[:240]}'
+    return error_type
 
 
 async def refresh_source(session, database, source, run_id, started_at):
@@ -61,8 +74,16 @@ async def refresh_source(session, database, source, run_id, started_at):
                 source['id'],
                 f'record_count_{len(records)}_below_minimum_{source["min_records"]}',
             )
-        database.replace_source_channels(source['id'], run_id, records)
-        return {'source_id': source['id'], 'status': 'healthy', 'record_count': len(records)}
+        summary = database.replace_source_channels(source['id'], run_id, records)
+        if not isinstance(summary, dict):
+            summary = {}
+        return {
+            'source_id': source['id'],
+            'status': 'healthy',
+            'record_count': summary.get('record_count', len(records)),
+            'source_record_count': summary.get('source_record_count', len(records)),
+            'duplicate_count': summary.get('duplicate_count', 0),
+        }
     except SourceRefreshError as error:
         database.fail_source_run(source['id'], run_id)
         return {
@@ -76,7 +97,7 @@ async def refresh_source(session, database, source, run_id, started_at):
         return {
             'source_id': source['id'],
             'status': 'failed',
-            'reason': type(error).__name__,
+            'reason': _diagnostic_reason(error),
             'record_count': 0,
         }
 
