@@ -99,13 +99,18 @@ class CliIntegrationTest(unittest.TestCase):
                 patch('teclosync.__main__.SnapshotStore') as store_class,
             ):
                 store = store_class.return_value
-                store.download_state_database.return_value = False
+                old_pointer = {
+                    'run_id': 'previous-run',
+                    'manifest_key': 'telclosync/state/releases/previous-run/manifest.json',
+                    'state_key': 'telclosync/state/releases/previous-run/teclo-sync.db',
+                }
+                store.download_state_database.return_value = True
                 store.publish_release.return_value = (
                     'telclosync/state/releases/20260101T000000Z/manifest.json'
                 )
-                store.read_pointer.return_value = None
+                store.read_pointer.return_value = old_pointer
                 store.upload_state_database.return_value = (
-                    'telclosync/state/state/teclo-sync.db'
+                    'telclosync/state/releases/20260101T000000Z/teclo-sync.db'
                 )
                 status = run_refresh(args)
 
@@ -123,8 +128,24 @@ class CliIntegrationTest(unittest.TestCase):
             self.assertEqual(payload['validation']['total_channels'], 12)
             self.assertEqual(payload['artifacts'][-1]['record_count'], 12)
             store.publish_release.assert_called_once()
-            store.upload_state_database.assert_called_once()
-            store.write_pointer.assert_called_once()
+            store.upload_state_database.assert_called_once_with(
+                str(database_path),
+                run_id=payload['run_id'],
+            )
+            store.download_state_database.assert_called_once_with(
+                str(database_path),
+                key=old_pointer['state_key'],
+            )
+            store.write_pointer.assert_any_call('previous.json', old_pointer)
+            store.write_pointer.assert_any_call(
+                'current.json',
+                {
+                    'run_id': payload['run_id'],
+                    'manifest_key': 'telclosync/state/releases/20260101T000000Z/manifest.json',
+                    'state_key': 'telclosync/state/releases/20260101T000000Z/teclo-sync.db',
+                },
+            )
+            self.assertEqual(store.write_pointer.call_count, 2)
 
     def test_validation_failure_blocks_publication(self):
         with tempfile.TemporaryDirectory() as directory:
