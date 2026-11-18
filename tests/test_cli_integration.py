@@ -235,5 +235,94 @@ class CliIntegrationTest(unittest.TestCase):
             self.assertIn('global_source_collapse', payload['error'])
 
 
+    def test_state_snapshot_failure_does_not_rotate_current_pointer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'sources.json'
+            database_path = root / 'state' / 'test.db'
+            output = root / 'state' / 'artifacts'
+            diagnostics = root / 'state' / 'diagnostics'
+            source = {
+                'id': 'test-source',
+                'name': 'Test Source',
+                'category': 'live_tv',
+                'format': 'm3u',
+                'url': 'https://example.test/playlist.m3u',
+                'enabled': True,
+                'status': 'validated',
+                'priority': 10,
+                'min_records': 1,
+                'timeout_seconds': 5,
+            }
+            config.write_text(
+                json.dumps({'version': 1, 'sources': [source]}),
+                encoding='utf-8',
+            )
+            database = StagingDatabase(database_path)
+            database.register_source(source)
+            database.begin_source_run(
+                'test-source',
+                '20260101T000000Z',
+                '2026-01-01T00:00:00+00:00',
+            )
+            database.replace_source_channels(
+                'test-source',
+                '20260101T000000Z',
+                [self._record(index) for index in range(2)],
+            )
+            refresh_result = {
+                'run_id': '20260101T000000Z',
+                'started_at': '2026-01-01T00:00:00+00:00',
+                'sources': [{
+                    'source_id': 'test-source',
+                    'status': 'healthy',
+                    'record_count': 2,
+                    'source_record_count': 2,
+                    'duplicate_count': 0,
+                }],
+            }
+            args = Namespace(
+                config=str(config),
+                database=str(database_path),
+                output=str(output),
+                diagnostics=str(diagnostics),
+                publish=True,
+            )
+            old_pointer = {
+                'run_id': 'old-run',
+                'manifest_key': 'telclosync/state/releases/old-run/manifest.json',
+                'state_key': 'telclosync/state/releases/old-run/teclo-sync.db',
+            }
+            with (
+                patch.dict(os.environ, self._environment()),
+                patch('teclosync.__main__.refresh_sources', return_value=refresh_result),
+                patch('teclosync.__main__.SnapshotStore') as store_class,
+            ):
+                store = store_class.return_value
+                store.download_state_database.return_value = True
+                store.read_pointer.return_value = old_pointer
+                store.publish_release.return_value = (
+                    'telclosync/state/releases/20260101T000000Z/manifest.json'
+                )
+                store.upload_state_database.side_effect = RuntimeError(
+                    'state_db_upload_failed'
+                )
+
+                status = run_refresh(args)
+
+            self.assertEqual(status, 1)
+            store.publish_release.assert_called_once()
+            store.upload_state_database.assert_called_once()
+            store.write_pointer.assert_not_called()
+            self.assertEqual(store.read_pointer.return_value, old_pointer)
+            diagnostic_files = list(diagnostics.glob('refresh-*.json'))
+            self.assertEqual(len(diagnostic_files), 1)
+            payload = json.loads(
+                diagnostic_files[0].read_text(encoding='utf-8')
+            )
+            self.assertFalse(payload['publish_succeeded'])
+            self.assertIn('state_db_upload_failed', payload['error'])
+
+
 if __name__ == '__main__':
     unittest.main()
