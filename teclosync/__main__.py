@@ -37,6 +37,9 @@ def source_freshness(database, sources, refresh_result):
             'status': result['status'],
             'data_state': data_state,
             'channel_count': count,
+            'accepted_record_count': result.get('record_count', 0),
+            'source_record_count': result.get('source_record_count', 0),
+            'duplicate_count': result.get('duplicate_count', 0),
             'reason': result.get('reason'),
         })
     return statuses
