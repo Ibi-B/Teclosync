@@ -77,18 +77,23 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
         result["integrity_check"] = [r[0] for r in conn.execute("PRAGMA integrity_check")]
         result["foreign_key_violations"] = [list(r) for r in conn.execute("PRAGMA foreign_key_check")]
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        required_tables = {"sources", "source_runs", "channels", "channel_duplicates", "programmes"}
+        required_tables = {"sources", "source_runs", "channels", "programmes"}
         result["missing_tables"] = sorted(required_tables - tables)
+        result["duplicate_audit_available"] = "channel_duplicates" in tables
         if not required_tables.issubset(tables):
             conn.close()
             return result
         total = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         result["database_channel_count"] = total
         result["programme_count"] = conn.execute("SELECT COUNT(*) FROM programmes").fetchone()[0]
-        result["duplicate_audit_rows_total"] = conn.execute("SELECT COUNT(*) FROM channel_duplicates").fetchone()[0]
-        result["duplicate_rows_for_release_run"] = conn.execute(
-            "SELECT COUNT(*) FROM channel_duplicates WHERE source_run_id = ?", (expected_run_id,)
-        ).fetchone()[0]
+        if "channel_duplicates" in tables:
+            result["duplicate_audit_rows_total"] = conn.execute("SELECT COUNT(*) FROM channel_duplicates").fetchone()[0]
+            result["duplicate_rows_for_release_run"] = conn.execute(
+                "SELECT COUNT(*) FROM channel_duplicates WHERE source_run_id = ?", (expected_run_id,)
+            ).fetchone()[0]
+        else:
+            result["duplicate_audit_rows_total"] = None
+            result["duplicate_rows_for_release_run"] = None
         result["source_count"] = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
         result["source_counts"] = [
             dict(r) for r in conn.execute(
