@@ -18,6 +18,8 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Compile Python sources
+        run: python -m compileall -q teclosync scripts tests
       - name: Validate configuration
         run: python -m teclosync validate-config
       - name: Run tests
