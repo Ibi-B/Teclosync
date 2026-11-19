@@ -58,7 +58,7 @@ The live check creates four tiny test releases and verifies:
 - rollback after simulating an ambiguous current-pointer write;
 - removal of the temporary verification prefix after a successful run.
 
-The manual R2 workflow has not yet been run. It requires the existing R2 repository variables and secrets to be available to GitHub Actions.
+The live R2 workflow passed on 19 November 2026 in run [44633287006](https://github.com/Ibi-B/Teclosync/actions/runs/44633287006). It verified current/previous rotation, archived release restore, SHA-256 checks for artifacts and state, pointer rollback after an ambiguous write, and cleanup of the isolated verification prefix. No production objects were used by that test.
 
 ## Separate legacy workflow
 
@@ -69,4 +69,15 @@ The scheduled `Refresh video catalog` workflow on `main` remains a separate fail
 - EPG sources remain disabled. XMLTV parser support is not EPG activation.
 - Cross-provider canonical station reconciliation is not implemented. Preserve source records and alternatives until a conservative identity model is designed.
 - Keep refresh manual-only; do not enable scheduled ingestion or automatic source discovery.
-- Do not merge this foundation to `main` until the isolated live R2 workflow succeeds, the R2 archive-only 90-day lifecycle rule is configured, and the remaining catalogue inspection is complete.
+- The 19 November 2026 production refresh published run `20261119T224927Z` under `telclosync/state`, with diagnostics under the separate `telclosync/diagnostics` prefix. It reported 29 healthy sources out of 33 and published 26,941 accepted records with zero same-source exact duplicates in that run. Four sources were unavailable: Cineverse and Whale TV Plus (M3U parse-shape errors), Samsung TV Plus Nordic Sweden (M3U parse-shape error), and JRomero88 VOD (HTTP 404). The current pointer is run `20261119T224927Z`; the previous pointer is `20261118T195146Z`.
+- The production refresh diagnostics provide source-level ingestion counts, but do not alone establish object-layout correctness, SQLite integrity, cross-source duplication, or field-level catalogue quality. A read-only inspection workflow has therefore been added on `main` at `.github/workflows/audit-production-r2.yml`. It downloads and hashes the live manifests, artifacts, and database snapshots, audits SQLite integrity/foreign keys, and checks the compressed catalogue against the database. It also optionally reads existing Cloudflare lifecycle rules.
+- `scripts/manage_archive_lifecycle.py` gates the 90-day expiry configuration on a successful production audit, integrity of both current and previous releases, archive pointer isolation, and absence of any enabled expiry rule overlapping current/previous. It preserves unrelated bucket lifecycle rules and then re-reads the policy to verify the new rule.
+- Do not merge this foundation to `main` until the production audit completes, the archive-only 90-day lifecycle rule is configured and read back successfully, and the remaining source-quality issues are reviewed.
+
+
+## Production R2 audit and archive lifecycle controls
+
+- The read-only production audit is launched from the Actions workflow on the default branch: [Audit Teclosync production R2 layout and catalogue](https://github.com/Ibi-B/Teclosync/actions/workflows/audit-production-r2.yml).
+- The configured production prefix observed in the 19 November refresh run is `telclosync/state`; diagnostics are deliberately outside that prefix at `telclosync/diagnostics`.
+- The workflow defaults to read-only. The optional lifecycle apply input is off by default. Enabling it requests only `telclosync/state/archive/` (90 days) and is gated by the audit report. The Cloudflare API credentials are separate from the R2 S3 credentials: `CLOUDFLARE_ACCOUNT_ID` repository variable and `CLOUDFLARE_API_TOKEN` secret with Workers R2 Storage Write permission.
+- No lifecycle rule has been changed yet. The live audit must first confirm the actual pointer/object layout and existing bucket rules.
