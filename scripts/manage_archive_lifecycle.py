@@ -52,6 +52,8 @@ def require_clean_release(release, slot):
         raise RuntimeError(f"{slot}_catalogue_record_count_mismatch")
     if catalogue.get("blank_names") or catalogue.get("blank_stream_urls") or catalogue.get("malformed_stream_urls") or catalogue.get("missing_provenance"):
         raise RuntimeError(f"{slot}_catalogue_quality_gate_failed")
+    if release.get("state_sha256_verified") is not True:
+        raise RuntimeError(f"{slot}_state_sha256_not_verified")
     if release.get("source_count_mismatches"):
         raise RuntimeError(f"{slot}_manifest_source_counts_mismatch")
 
@@ -64,6 +66,9 @@ def validate_audit(report):
         raise RuntimeError("production_prefix_mismatch")
     require_clean_release(report.get("current"), "current")
     require_clean_release(report.get("previous"), "previous")
+    layout = report.get("layout") or {}
+    if layout.get("current_prefix_present") is not True or layout.get("previous_prefix_present") is not True:
+        raise RuntimeError("protected_release_prefix_layout_incomplete")
     archive = report.get("archive") or {}
     if archive.get("all_pointer_references_scoped_to_archive") is not True:
         raise RuntimeError("archive_pointer_layout_invalid")
@@ -85,7 +90,12 @@ def main():
         audit = json.loads(AUDIT_REPORT.read_text(encoding="utf-8"))
         base, lifecycle_snapshot = validate_audit(audit)
         bucket = os.environ["TECLOSYNC_S3_BUCKET"]
-        account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+        account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        if not account_id:
+            from urllib.parse import urlsplit
+            endpoint_host = urlsplit(os.environ.get("TECLOSYNC_S3_ENDPOINT", "")).hostname or ""
+            if endpoint_host.endswith(".r2.cloudflarestorage.com"):
+                account_id = endpoint_host.split(".", 1)[0]
         token = os.environ["CLOUDFLARE_API_TOKEN"]
         if not account_id or not token:
             raise RuntimeError("cloudflare_account_id_or_api_token_missing")
@@ -103,9 +113,23 @@ def main():
                 ):
                     raise RuntimeError("lifecycle_policy_changed_or_protected_prefix_now_at_risk")
         target_prefix = f"{base}/archive/"
+        rule_ids = [rule.get("id") for rule in current_rules]
+        if len(rule_ids) != len(set(rule_ids)):
+            raise RuntimeError("existing_lifecycle_rule_ids_are_not_unique")
         existing_target = [rule for rule in current_rules if rule.get("id") == RULE_ID]
         if any((rule.get("conditions") or {}).get("prefix") != target_prefix for rule in existing_target):
             raise RuntimeError("lifecycle_rule_id_already_used_for_different_prefix")
+        for rule in current_rules:
+            if rule.get("id") == RULE_ID or rule.get("enabled") is not True or not rule.get("deleteObjectsTransition"):
+                continue
+            old_prefix = (rule.get("conditions") or {}).get("prefix", "")
+            overlaps_archive = (
+                not old_prefix
+                or target_prefix.startswith(old_prefix)
+                or old_prefix.startswith(target_prefix)
+            )
+            if overlaps_archive:
+                raise RuntimeError("existing_delete_rule_overlaps_archive_prefix_manual_review_required")
         preserved_rules = [rule for rule in current_rules if rule.get("id") != RULE_ID]
         target_rule = {
             "id": RULE_ID,
@@ -144,6 +168,13 @@ def main():
             expected_ids = {rule.get("id") for rule in next_rules}
             if observed_ids != expected_ids:
                 raise RuntimeError("lifecycle_rule_collection_changed_unexpectedly")
+            expected_preserved = {rule.get("id"): rule for rule in preserved_rules}
+            observed_preserved = {
+                rule.get("id"): rule for rule in after_rules
+                if rule.get("id") != RULE_ID
+            }
+            if observed_preserved != expected_preserved:
+                raise RuntimeError("existing_lifecycle_rules_not_preserved_exactly")
             result["applied"] = True
             result["verified"] = True
             result["final_rule_count"] = len(after_rules)
