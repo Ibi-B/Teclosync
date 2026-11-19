@@ -209,11 +209,14 @@ def main():
             store.delete_prefix('previous/check-3')
             store.delete_prefix('staging/check-4')
 
+        store.delete_prefix('')
+        if store.object_exists(store.object_key('current/current.json')):
+            raise RuntimeError('verification_prefix_cleanup_failed')
+        result['cleanup'] = 'verification prefix deletion verified'
         result['success'] = True
         result['completed_at'] = datetime.now(timezone.utc).isoformat()
-        result['cleanup'] = 'verification prefix removed'
-        store.delete_prefix('')
     except Exception as error:
+        result['success'] = False
         result['error'] = f'{type(error).__name__}: {error}'
         result['completed_at'] = datetime.now(timezone.utc).isoformat()
         Path('state/diagnostics').mkdir(parents=True, exist_ok=True)
