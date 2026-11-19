@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from teclosync.build import build_artifacts
 from teclosync.external_state import SnapshotStore, ExternalStateError
 from teclosync.refresh import refresh_source
-from teclosync.__main__ import publish_current_pointer
+from teclosync.retention import StateRotator
 from teclosync.staging import StagingDatabase
 
 
@@ -149,68 +149,92 @@ class StatePointerTest(unittest.TestCase):
 
 class PointerRollbackTest(unittest.TestCase):
     class AmbiguousStore:
-        def __init__(self, previous):
-            self.pointers = {'current.json': previous}
-            self.calls = []
-            self.fail_new_current_once = True
+        def __init__(self, current, previous):
+            self.pointers = {
+                'current/current.json': current,
+                'previous/current.json': previous,
+            }
+            self.fail_current_once = False
+            self.fail_previous_once = False
+            self.deleted_prefixes = []
+
+        def read_current_pointer(self):
+            return self.pointers.get('current/current.json')
+
+        def read_previous_pointer(self):
+            return self.pointers.get('previous/current.json')
+
+        def copy_release(self, pointer, destination):
+            return {
+                **pointer,
+                'manifest_key': f'{destination}/{pointer["run_id"]}/manifest.json',
+                'state_key': f'{destination}/{pointer["run_id"]}/teclo-sync.db',
+            }
 
         def write_pointer(self, name, payload):
-            self.calls.append((name, payload))
-            if name == 'previous.json':
-                self.pointers[name] = payload
-                return
-            if name == 'current.json' and payload['run_id'] == 'new-run':
-                # Simulate the PUT committing, but the response/read-back failing.
-                self.pointers[name] = payload
-                if self.fail_new_current_once:
-                    self.fail_new_current_once = False
-                    raise RuntimeError('pointer_verification_failed')
             self.pointers[name] = payload
+            if name == 'current/current.json' and self.fail_current_once:
+                self.fail_current_once = False
+                raise RuntimeError('pointer_verification_failed')
+            if name == 'previous/current.json' and self.fail_previous_once:
+                self.fail_previous_once = False
+                raise RuntimeError('previous_pointer_write_failed')
 
-    def test_failed_current_pointer_verification_restores_last_good_pointer(self):
+        def delete_pointer(self, name):
+            self.pointers.pop(name, None)
+
+        def delete_prefix(self, prefix):
+            self.deleted_prefixes.append(prefix)
+
+    def test_failed_current_pointer_verification_restores_both_slots(self):
         previous = {
-            'run_id': 'old-run',
-            'manifest_key': 'releases/old-run/manifest.json',
-            'state_key': 'releases/old-run/teclo-sync.db',
+            'run_id': 'old-previous',
+            'manifest_key': 'previous/old-previous/manifest.json',
+            'state_key': 'previous/old-previous/teclo-sync.db',
         }
         current = {
-            'run_id': 'new-run',
-            'manifest_key': 'releases/new-run/manifest.json',
-            'state_key': 'releases/new-run/teclo-sync.db',
+            'run_id': 'old-current',
+            'manifest_key': 'current/old-current/manifest.json',
+            'state_key': 'current/old-current/teclo-sync.db',
         }
-        store = self.AmbiguousStore(previous)
+        store = self.AmbiguousStore(current, previous)
+        store.fail_current_once = True
 
         with self.assertRaisesRegex(RuntimeError, 'pointer_verification_failed'):
-            publish_current_pointer(store, current, previous)
+            StateRotator(store).promote({
+                'run_id': 'new-run',
+                'manifest_key': 'releases/new-run/manifest.json',
+                'state_key': 'releases/new-run/teclo-sync.db',
+            })
 
-        self.assertEqual(store.pointers['current.json'], previous)
-        self.assertEqual(store.pointers['previous.json'], previous)
-        self.assertEqual(
-            [name for name, _ in store.calls],
-            ['previous.json', 'current.json', 'current.json'],
-        )
+        self.assertEqual(store.pointers['current/current.json'], current)
+        self.assertEqual(store.pointers['previous/current.json'], previous)
+        self.assertEqual(store.deleted_prefixes, [])
 
-    def test_previous_pointer_failure_does_not_touch_current(self):
-        previous = {'run_id': 'old-run', 'manifest_key': 'old-manifest'}
-        current = {'run_id': 'new-run', 'manifest_key': 'new-manifest'}
+    def test_previous_pointer_failure_leaves_current_unchanged(self):
+        previous = {
+            'run_id': 'old-previous',
+            'manifest_key': 'previous/old-previous/manifest.json',
+            'state_key': 'previous/old-previous/teclo-sync.db',
+        }
+        current = {
+            'run_id': 'old-current',
+            'manifest_key': 'current/old-current/manifest.json',
+            'state_key': 'current/old-current/teclo-sync.db',
+        }
+        store = self.AmbiguousStore(current, previous)
+        store.fail_previous_once = True
 
-        class FailingPreviousStore:
-            def __init__(self):
-                self.current = previous
-                self.calls = []
-
-            def write_pointer(self, name, payload):
-                self.calls.append(name)
-                if name == 'previous.json':
-                    raise RuntimeError('previous_pointer_write_failed')
-                self.current = payload
-
-        store = FailingPreviousStore()
         with self.assertRaisesRegex(RuntimeError, 'previous_pointer_write_failed'):
-            publish_current_pointer(store, current, previous)
+            StateRotator(store).promote({
+                'run_id': 'new-run',
+                'manifest_key': 'releases/new-run/manifest.json',
+                'state_key': 'releases/new-run/teclo-sync.db',
+            })
 
-        self.assertEqual(store.current, previous)
-        self.assertEqual(store.calls, ['previous.json'])
+        self.assertEqual(store.pointers['current/current.json'], current)
+        self.assertEqual(store.pointers['previous/current.json'], previous)
+        self.assertEqual(store.deleted_prefixes, [])
 
 
 if __name__ == '__main__':
