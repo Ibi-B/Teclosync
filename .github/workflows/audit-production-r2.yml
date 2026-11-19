@@ -58,6 +58,7 @@ jobs:
         if: ${{ inputs.apply_archive_expiry }}
         env:
           TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
           TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
