@@ -10,6 +10,11 @@ on:
         default: feature/teelosync-foundation
         options:
           - feature/teelosync-foundation
+      apply_archive_expiry:
+        description: Apply the 90-day expiry rule to the configured archive/ prefix only after audit safety gates pass
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -46,11 +51,20 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python scripts/inspect_production_r2.py
 
+      - name: Apply or dry-run archive-only lifecycle rule
+        if: ${{ inputs.apply_archive_expiry }}
+        env:
+          TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python scripts/manage_archive_lifecycle.py --apply
+
       - name: Upload production audit report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: teclosync-production-r2-audit
-          path: state/diagnostics/production-r2-audit.json
+          path: state/diagnostics/
           if-no-files-found: warn
           retention-days: 14
