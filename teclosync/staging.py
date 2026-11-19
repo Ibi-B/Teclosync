@@ -82,19 +82,29 @@ CREATE INDEX IF NOT EXISTS idx_programmes_start ON programmes(start_time);
 
 
 class StagingDatabase:
+    def _connect(self):
+        connection = sqlite3.connect(self.path)
+        connection.execute('PRAGMA foreign_keys = ON')
+        return connection
+
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.executescript(SCHEMA)
             connection.commit()
 
     def register_source(self, source):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
-                'INSERT OR REPLACE INTO sources '
+                'INSERT INTO sources '
                 '(source_id, name, category, format, url, min_records, timeout_seconds) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                'VALUES (?, ?, ?, ?, ?, ?, ?) '
+                'ON CONFLICT(source_id) DO UPDATE SET '
+                'name = excluded.name, category = excluded.category, '
+                'format = excluded.format, url = excluded.url, '
+                'min_records = excluded.min_records, '
+                'timeout_seconds = excluded.timeout_seconds',
                 (
                     source['id'],
                     source['name'],
@@ -108,11 +118,14 @@ class StagingDatabase:
             connection.commit()
 
     def begin_source_run(self, source_id, run_id, started_at):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
-                'INSERT OR REPLACE INTO source_runs '
+                'INSERT INTO source_runs '
                 '(source_id, run_id, started_at, status, record_count) '
-                'VALUES (?, ?, ?, ?, 0)',
+                'VALUES (?, ?, ?, ?, 0) '
+                'ON CONFLICT(source_id, run_id) DO UPDATE SET '
+                'started_at = excluded.started_at, '
+                'status = excluded.status, record_count = 0',
                 (source_id, run_id, started_at, 'running'),
             )
             connection.commit()
@@ -167,7 +180,7 @@ class StagingDatabase:
         if not duplicate_records:
             return 0
 
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.execute('BEGIN IMMEDIATE')
             try:
                 connection.executemany(
@@ -201,7 +214,7 @@ class StagingDatabase:
             records,
         )
 
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.execute('BEGIN IMMEDIATE')
             try:
                 connection.execute('DELETE FROM channels WHERE source_id = ?', (source_id,))
@@ -270,14 +283,14 @@ class StagingDatabase:
         }
 
     def source_duplicate_count(self, source_id):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             return connection.execute(
                 'SELECT COUNT(*) FROM channel_duplicates WHERE source_id = ?',
                 (source_id,),
             ).fetchone()[0]
 
     def iter_channel_duplicates(self, source_id=None):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.row_factory = sqlite3.Row
             if source_id is None:
                 rows = connection.execute(
@@ -297,7 +310,7 @@ class StagingDatabase:
                 yield duplicate
 
     def replace_source_programmes(self, source_id, run_id, records):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.execute('BEGIN IMMEDIATE')
             try:
                 connection.execute('DELETE FROM programmes WHERE source_id = ?', (source_id,))
@@ -334,7 +347,7 @@ class StagingDatabase:
                 raise
 
     def fail_source_run(self, source_id, run_id, status='failed'):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.execute(
                 'UPDATE source_runs SET status = ? WHERE source_id = ? AND run_id = ?',
                 (status, source_id, run_id),
@@ -342,7 +355,7 @@ class StagingDatabase:
             connection.commit()
 
     def iter_channels(self):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             connection.row_factory = sqlite3.Row
             for row in connection.execute(
                 'SELECT * FROM channels ORDER BY source_id, source_record_index'
@@ -354,23 +367,23 @@ class StagingDatabase:
                 yield record
 
     def source_channel_count(self, source_id):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             return connection.execute(
                 'SELECT COUNT(*) FROM channels WHERE source_id = ?',
                 (source_id,),
             ).fetchone()[0]
 
     def source_programme_count(self, source_id):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             return connection.execute(
                 'SELECT COUNT(*) FROM programmes WHERE source_id = ?',
                 (source_id,),
             ).fetchone()[0]
 
     def channel_count(self):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             return connection.execute('SELECT COUNT(*) FROM channels').fetchone()[0]
 
     def programme_count(self):
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(self._connect()) as connection:
             return connection.execute('SELECT COUNT(*) FROM programmes').fetchone()[0]
