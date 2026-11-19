@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 
-from teclosync.normalizers.m3u import normalize_m3u_entry
+from teclosync.normalizers.m3u import is_usable_stream_url, normalize_m3u_entry
 from teclosync.parsers.m3u import parse_m3u
 
 MAX_CONCURRENT_SOURCES = 3
@@ -55,11 +55,28 @@ async def fetch_text(session, source):
     )
 
 
-def ingest_m3u(source, source_url, text, retrieved_at):
-    return [
-        normalize_m3u_entry(entry, source, source_url, retrieved_at)
-        for entry in parse_m3u(text.splitlines(), source['id'])
-    ]
+def ingest_m3u(source, source_url, text, retrieved_at, diagnostics=None):
+    records = []
+    rejected = []
+    for entry in parse_m3u(text.splitlines(), source['id']):
+        record = normalize_m3u_entry(entry, source, source_url, retrieved_at)
+        if not is_usable_stream_url(record['stream_url']):
+            if len(rejected) < 20:
+                rejected.append({
+                    'source_record_index': entry.source_record_index,
+                    'name': record['name'],
+                    'stream_url': record['stream_url'][:180],
+                    'reason': 'invalid_or_placeholder_stream_url',
+                })
+            continue
+        records.append(record)
+    if diagnostics is not None:
+        diagnostics['rejected_stream_count'] = sum(
+            1 for entry in parse_m3u(text.splitlines(), source['id'])
+            if not is_usable_stream_url(entry.url)
+        )
+        diagnostics['rejected_stream_examples'] = rejected
+    return records
 
 
 def _diagnostic_reason(error):
@@ -76,7 +93,8 @@ async def refresh_source(session, database, source, run_id, started_at):
         if source['format'] != 'm3u':
             raise SourceRefreshError(source['id'], 'unsupported_format_for_refresh')
         text = await fetch_text(session, source)
-        records = ingest_m3u(source, source['url'], text, run_id)
+        ingest_diagnostics = {}
+        records = ingest_m3u(source, source['url'], text, run_id, diagnostics=ingest_diagnostics)
         summary = database.summarize_source_channels(source['id'], records)
         if summary['record_count'] < source['min_records']:
             database.record_source_duplicates(source['id'], run_id, records)
@@ -105,6 +123,8 @@ async def refresh_source(session, database, source, run_id, started_at):
                 'duplicate_count',
                 summary['duplicate_count'],
             ),
+            'rejected_stream_count': ingest_diagnostics.get('rejected_stream_count', 0),
+            'rejected_stream_examples': ingest_diagnostics.get('rejected_stream_examples', []),
         }
     except SourceRefreshError as error:
         database.fail_source_run(source['id'], run_id)
