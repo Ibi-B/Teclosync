@@ -1,6 +1,9 @@
 name: Validate Telclosync
 
 on:
+  push:
+    branches:
+      - feature/teelosync-foundation
   pull_request:
   workflow_dispatch:
 
