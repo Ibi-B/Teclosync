@@ -38,6 +38,7 @@ jobs:
 
       - name: Verify isolated R2 upload, restore, rotation, archive, and rollback
         env:
+          PYTHONPATH: .
           TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
           TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
           TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
