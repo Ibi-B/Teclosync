@@ -44,6 +44,24 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(result['sources'][0]['status'], 'healthy')
         self.assertEqual(database.source_channel_count('test-source'), 1)
 
+    def test_placeholder_streams_are_excluded_and_reported(self):
+        m3u = (
+            '#EXTM3U\\n'
+            '#EXTINF:-1,Playable\\nhttps://example.org/live.m3u8\\n'
+            '#EXTINF:-1,Unavailable\\n[NO PUBLIC STREAM]\\n'
+        )
+        database, result = self.run_refresh_fixture([self.source()], m3u)
+        source_result = result['sources'][0]
+        self.assertEqual(source_result['status'], 'healthy')
+        self.assertEqual(source_result['record_count'], 1)
+        self.assertEqual(source_result['rejected_stream_count'], 1)
+        self.assertEqual(source_result['rejected_stream_examples'][0]['name'], 'Unavailable')
+        self.assertEqual(database.source_channel_count('test-source'), 1)
+        self.assertEqual(
+            [record['stream_url'] for record in database.iter_channels()],
+            ['https://example.org/live.m3u8'],
+        )
+
     def test_exact_duplicates_are_reported_without_losing_provenance(self):
         m3u = (
             '#EXTM3U\n'
