@@ -6,10 +6,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from teclosync.build import BuildError, build_artifacts
+from teclosync.build import build_artifacts
 from teclosync.config import load_sources
-from teclosync.external_state import ExternalStateError, SnapshotStore
+from teclosync.external_state import SnapshotStore, sha256_file
 from teclosync.refresh import refresh_sources
+from teclosync.retention import StateRotator
 from teclosync.staging import StagingDatabase
 from teclosync.validation import ValidationError, validate_refresh
 
@@ -18,6 +19,29 @@ def write_diagnostics(path, payload):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
+def persist_diagnostics(path, payload, store, run_id):
+    write_diagnostics(path, payload)
+    if store is None:
+        return
+    try:
+        key = store.upload_diagnostic(
+            path,
+            run_id,
+            diagnostics_prefix=os.environ.get('TECLOSYNC_DIAGNOSTICS_PREFIX'),
+        )
+        payload['diagnostics_object_key'] = key
+        write_diagnostics(path, payload)
+        # Refresh the object so the uploaded copy includes its own object key.
+        store.upload_diagnostic(
+            path,
+            run_id,
+            diagnostics_prefix=os.environ.get('TECLOSYNC_DIAGNOSTICS_PREFIX'),
+        )
+    except Exception as error:
+        payload['diagnostics_upload_error'] = f'{type(error).__name__}: {error}'
+        write_diagnostics(path, payload)
 
 
 def source_freshness(database, sources, refresh_result):
@@ -45,50 +69,56 @@ def source_freshness(database, sources, refresh_result):
     return statuses
 
 
-def publish_current_pointer(store, current_pointer, previous_pointer=None):
-    if previous_pointer:
-        store.write_pointer('previous.json', previous_pointer)
-
-    try:
-        store.write_pointer('current.json', current_pointer)
-    except Exception as publication_error:
-        if previous_pointer:
-            try:
-                # A failed read-back can occur after the object-store PUT has
-                # committed. Restore the last-known-good pointer before returning.
-                store.write_pointer('current.json', previous_pointer)
-            except Exception as rollback_error:
-                raise ExternalStateError(
-                    'current_pointer_update_failed_and_rollback_failed: '
-                    f'{publication_error}; {rollback_error}'
-                ) from rollback_error
-        raise
-
-
 def run_refresh(args):
     started_at = datetime.now(timezone.utc)
     run_id = started_at.strftime('%Y%m%dT%H%M%SZ')
+    diagnostics_path = Path(args.diagnostics) / f'refresh-{run_id}.json'
     sources = load_sources(args.config)
     enabled_sources = [source for source in sources if source.get('enabled', False)]
     store = None
-    previous_pointer = None
+    current_pointer = None
     restored = False
+
     if args.publish:
-        store = SnapshotStore(
-            bucket=os.environ['TECLOSYNC_S3_BUCKET'],
-            endpoint_url=os.environ['TECLOSYNC_S3_ENDPOINT'],
-            access_key_id=os.environ['TECLOSYNC_S3_ACCESS_KEY_ID'],
-            secret_access_key=os.environ['TECLOSYNC_S3_SECRET_ACCESS_KEY'],
-            prefix=os.environ.get('TECLOSYNC_S3_PREFIX', 'telclosync/state'),
-            region=os.environ.get('TECLOSYNC_S3_REGION', 'auto'),
-        )
-        previous_pointer = store.read_pointer('current.json')
-        state_key = (
-            previous_pointer.get('state_key')
-            if isinstance(previous_pointer, dict)
-            else None
-        )
-        restored = store.download_state_database(args.database, key=state_key)
+        try:
+            store = SnapshotStore(
+                bucket=os.environ['TECLOSYNC_S3_BUCKET'],
+                endpoint_url=os.environ['TECLOSYNC_S3_ENDPOINT'],
+                access_key_id=os.environ['TECLOSYNC_S3_ACCESS_KEY_ID'],
+                secret_access_key=os.environ['TECLOSYNC_S3_SECRET_ACCESS_KEY'],
+                prefix=os.environ.get('TECLOSYNC_S3_PREFIX', 'telclosync/state'),
+                region=os.environ.get('TECLOSYNC_S3_REGION', 'auto'),
+            )
+            current_pointer = store.read_current_pointer()
+            state_key = (
+                current_pointer.get('state_key')
+                if isinstance(current_pointer, dict)
+                else None
+            )
+            expected_state_sha256 = (
+                current_pointer.get('state_sha256')
+                if isinstance(current_pointer, dict)
+                else None
+            )
+            restored = store.download_state_database(
+                args.database,
+                key=state_key,
+                expected_sha256=expected_state_sha256,
+            )
+        except Exception as error:
+            diagnostics = {
+                'run_id': run_id,
+                'started_at': started_at.isoformat(),
+                'publish_requested': True,
+                'publish_succeeded': False,
+                'last_good_restored': False,
+                'error': f'{type(error).__name__}: {error}',
+                'failed_at': 'state_restore',
+            }
+            persist_diagnostics(diagnostics_path, diagnostics, store, run_id)
+            print(json.dumps(diagnostics), file=sys.stderr)
+            return 1
+
     database = StagingDatabase(args.database)
     for source in enabled_sources:
         database.register_source(source)
@@ -114,28 +144,32 @@ def run_refresh(args):
         if args.publish:
             manifest_key = store.publish_release(manifest, run_id, args.output)
             state_key = store.upload_state_database(args.database, run_id=run_id)
-            current_pointer = {
+            new_release_pointer = {
                 'run_id': run_id,
                 'manifest_key': manifest_key,
                 'state_key': state_key,
+                'state_sha256': sha256_file(args.database),
             }
-            publish_current_pointer(store, current_pointer, previous_pointer)
+            rotation = StateRotator(store).promote(new_release_pointer)
             diagnostics['publish_succeeded'] = True
-            diagnostics['manifest_key'] = manifest_key
-            diagnostics['current_pointer'] = current_pointer
-            diagnostics['state_key'] = state_key
+            diagnostics['current_pointer'] = rotation['current']
+            diagnostics['previous_pointer'] = rotation['previous']
+            diagnostics['archived_pointer'] = rotation['archived']
+            diagnostics['cleanup_errors'] = rotation['cleanup_errors']
         diagnostics['completed_at'] = datetime.now(timezone.utc).isoformat()
-        write_diagnostics(Path(args.diagnostics) / f'refresh-{run_id}.json', diagnostics)
+        persist_diagnostics(diagnostics_path, diagnostics, store, run_id)
         print(json.dumps({
             'run_id': run_id,
             'healthy_sources': len(validation_report['healthy_sources']),
             'published': args.publish and diagnostics['publish_succeeded'],
+            'diagnostics_object_key': diagnostics.get('diagnostics_object_key'),
+            'diagnostics_upload_error': diagnostics.get('diagnostics_upload_error'),
         }))
         return 0
     except Exception as error:
         diagnostics['completed_at'] = datetime.now(timezone.utc).isoformat()
         diagnostics['error'] = f'{type(error).__name__}: {error}'
-        write_diagnostics(Path(args.diagnostics) / f'refresh-{run_id}.json', diagnostics)
+        persist_diagnostics(diagnostics_path, diagnostics, store, run_id)
         print(json.dumps(diagnostics), file=sys.stderr)
         return 1
 
@@ -154,7 +188,7 @@ def main():
     try:
         sources = load_sources(args.config)
     except (ValueError, OSError) as error:
-        parser.exit(1, f'Configuration error: {error}\n')
+        parser.exit(1, f'Configuration error: {error}\\n')
     if args.command == 'list-sources':
         print(json.dumps(sources, indent=2, ensure_ascii=False))
     else:
