@@ -106,5 +106,101 @@ class ExternalStateTests(unittest.TestCase):
         )
 
 
+    def test_restore_rejects_hash_mismatch_without_replacing_existing_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.db'
+            path.write_bytes(b'known-good-local-state')
+            store = self.store()
+            store.client.get_object.return_value = {
+                'Body': io.BytesIO(b'corrupted-remote-state')
+            }
+
+            with self.assertRaisesRegex(ExternalStateError, 'state_snapshot_hash_mismatch'):
+                store.download_state_database(
+                    path,
+                    key='telclosync/state/releases/run-1/teclo-sync.db',
+                    expected_sha256=hashlib.sha256(b'expected-state').hexdigest(),
+                )
+
+            self.assertEqual(path.read_bytes(), b'known-good-local-state')
+
+    def test_diagnostic_is_uploaded_to_explicit_diagnostics_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'refresh.json'
+            payload = b'{"run_id":"run-1","ok":true}'
+            path.write_bytes(payload)
+            store = self.store()
+            store.client.get_object.return_value = {'Body': io.BytesIO(payload)}
+
+            key = store.upload_diagnostic(
+                path,
+                'run-1',
+                diagnostics_prefix='telclosync/diagnostics',
+            )
+
+            self.assertEqual(key, 'telclosync/diagnostics/refresh-run-1.json')
+            store.client.put_object.assert_called_once_with(
+                Bucket='test-bucket',
+                Key=key,
+                Body=payload,
+            )
+
+    def test_copy_release_verifies_and_preserves_manifest_artifacts_and_state(self):
+        class MemoryObjectClient:
+            class exceptions:
+                class ClientError(Exception):
+                    pass
+
+            def __init__(self, objects):
+                self.objects = dict(objects)
+
+            def get_object(self, Bucket, Key):
+                if Key not in self.objects:
+                    error = self.exceptions.ClientError(Key)
+                    error.response = {'Error': {'Code': 'NoSuchKey'}}
+                    raise error
+                return {'Body': io.BytesIO(self.objects[Key])}
+
+            def put_object(self, Bucket, Key, Body, **kwargs):
+                self.objects[Key] = Body
+
+        artifact = b'#EXTM3U\\n#EXTINF:-1,Station\\nhttps://example.test/live\\n'
+        state = b'known-good-sqlite-snapshot'
+        manifest = {
+            'run_id': 'run-9',
+            'artifacts': [{
+                'id': 'live-global',
+                'path': 'live-global.m3u8',
+                'sha256': hashlib.sha256(artifact).hexdigest(),
+            }],
+        }
+        manifest_payload = json.dumps(manifest).encode()
+        store = self.store()
+        store.client = MemoryObjectClient({
+            'telclosync/state/releases/run-9/manifest.json': manifest_payload,
+            'telclosync/state/releases/run-9/live-global.m3u8': artifact,
+            'telclosync/state/releases/run-9/teclo-sync.db': state,
+        })
+        pointer = {
+            'run_id': 'run-9',
+            'manifest_key': 'telclosync/state/releases/run-9/manifest.json',
+            'state_key': 'telclosync/state/releases/run-9/teclo-sync.db',
+            'state_sha256': hashlib.sha256(state).hexdigest(),
+        }
+
+        archived = store.copy_release(pointer, 'archive')
+
+        self.assertEqual(archived['manifest_key'], 'telclosync/state/archive/run-9/manifest.json')
+        self.assertEqual(archived['state_key'], 'telclosync/state/archive/run-9/teclo-sync.db')
+        self.assertEqual(
+            store.client.objects['telclosync/state/archive/run-9/live-global.m3u8'],
+            artifact,
+        )
+        self.assertEqual(
+            store.client.objects[archived['state_key']],
+            state,
+        )
+
+
 if __name__ == '__main__':
     unittest.main()
