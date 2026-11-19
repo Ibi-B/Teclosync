@@ -38,6 +38,7 @@ class CliIntegrationTest(unittest.TestCase):
             'TECLOSYNC_S3_ENDPOINT': 'https://example.test',
             'TECLOSYNC_S3_ACCESS_KEY_ID': 'test-access',
             'TECLOSYNC_S3_SECRET_ACCESS_KEY': 'test-secret',
+            'TECLOSYNC_DIAGNOSTICS_PREFIX': 'telclosync/diagnostics',
         }
 
     def test_refresh_builds_validates_and_publishes(self):
@@ -97,8 +98,17 @@ class CliIntegrationTest(unittest.TestCase):
                 patch.dict(os.environ, self._environment()),
                 patch('teclosync.__main__.refresh_sources', return_value=refresh_result),
                 patch('teclosync.__main__.SnapshotStore') as store_class,
+                patch('teclosync.__main__.StateRotator') as rotator_class,
             ):
                 store = store_class.return_value
+                store.read_current_pointer.return_value = old_pointer
+                store.upload_diagnostic.return_value = 'telclosync/diagnostics/refresh-test.json'
+                rotator_class.return_value.promote.return_value = {
+                    'current': {'run_id': '20260101T000000Z'},
+                    'previous': {'run_id': 'previous-run'},
+                    'archived': None,
+                    'cleanup_errors': [],
+                }
                 old_pointer = {
                     'run_id': 'previous-run',
                     'manifest_key': 'telclosync/state/releases/previous-run/manifest.json',
@@ -108,7 +118,6 @@ class CliIntegrationTest(unittest.TestCase):
                 store.publish_release.return_value = (
                     'telclosync/state/releases/20260101T000000Z/manifest.json'
                 )
-                store.read_pointer.return_value = old_pointer
                 store.upload_state_database.return_value = (
                     'telclosync/state/releases/20260101T000000Z/teclo-sync.db'
                 )
@@ -147,17 +156,16 @@ class CliIntegrationTest(unittest.TestCase):
             store.download_state_database.assert_called_once_with(
                 str(database_path),
                 key=old_pointer['state_key'],
+                expected_sha256=None,
             )
-            store.write_pointer.assert_any_call('previous.json', old_pointer)
-            store.write_pointer.assert_any_call(
-                'current.json',
-                {
-                    'run_id': payload['run_id'],
-                    'manifest_key': 'telclosync/state/releases/20260101T000000Z/manifest.json',
-                    'state_key': 'telclosync/state/releases/20260101T000000Z/teclo-sync.db',
-                },
-            )
-            self.assertEqual(store.write_pointer.call_count, 2)
+            self.assertEqual(payload['diagnostics_object_key'], 'telclosync/diagnostics/refresh-test.json')
+            store.upload_diagnostic.assert_called()
+            rotator_class.return_value.promote.assert_called_once()
+            new_pointer = rotator_class.return_value.promote.call_args.args[0]
+            self.assertEqual(new_pointer['run_id'], payload['run_id'])
+            self.assertEqual(new_pointer['manifest_key'], 'telclosync/state/releases/20260101T000000Z/manifest.json')
+            self.assertEqual(new_pointer['state_key'], 'telclosync/state/releases/20260101T000000Z/teclo-sync.db')
+            self.assertEqual(len(new_pointer['state_sha256']), 64)
 
     def test_validation_failure_blocks_publication(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -217,7 +225,9 @@ class CliIntegrationTest(unittest.TestCase):
                 patch('teclosync.__main__.refresh_sources', return_value=refresh_result),
                 patch('teclosync.__main__.SnapshotStore') as store_class,
             ):
+                store_class.return_value.read_current_pointer.return_value = None
                 store_class.return_value.download_state_database.return_value = False
+                store_class.return_value.upload_diagnostic.return_value = 'telclosync/diagnostics/failure.json'
                 status = run_refresh(args)
 
             self.assertEqual(status, 1)
@@ -300,7 +310,8 @@ class CliIntegrationTest(unittest.TestCase):
             ):
                 store = store_class.return_value
                 store.download_state_database.return_value = True
-                store.read_pointer.return_value = old_pointer
+                store.read_current_pointer.return_value = old_pointer
+                store.upload_diagnostic.return_value = 'telclosync/diagnostics/failure.json'
                 store.publish_release.return_value = (
                     'telclosync/state/releases/20260101T000000Z/manifest.json'
                 )
@@ -314,7 +325,6 @@ class CliIntegrationTest(unittest.TestCase):
             store.publish_release.assert_called_once()
             store.upload_state_database.assert_called_once()
             store.write_pointer.assert_not_called()
-            self.assertEqual(store.read_pointer.return_value, old_pointer)
             diagnostic_files = list(diagnostics.glob('refresh-*.json'))
             self.assertEqual(len(diagnostic_files), 1)
             payload = json.loads(
