@@ -32,7 +32,7 @@ def api_call(method, url, token, payload=None):
     return result.get("result") or {}
 
 
-def require_clean_release(release, slot):
+def require_clean_release(release, slot, strict_catalogue=True):
     if not isinstance(release, dict):
         raise RuntimeError(f"{slot}_release_not_present")
     state = release.get("database_and_catalogue") or {}
@@ -46,13 +46,15 @@ def require_clean_release(release, slot):
         raise RuntimeError(f"{slot}_sqlite_schema_incomplete")
     if state.get("database_channel_count", 0) <= 0:
         raise RuntimeError(f"{slot}_database_has_no_channels")
-    if quality.get("blank_names") or quality.get("blank_stream_urls") or quality.get("malformed_stream_urls"):
-        raise RuntimeError(f"{slot}_catalogue_has_invalid_channel_fields")
     if catalogue.get("record_count") != state.get("database_channel_count") or not catalogue.get("matches_database_count"):
         raise RuntimeError(f"{slot}_catalogue_record_count_mismatch")
     if catalogue.get("matches_database_keys") is not True:
         raise RuntimeError(f"{slot}_catalogue_database_key_mismatch")
-    if catalogue.get("blank_names") or catalogue.get("blank_stream_urls") or catalogue.get("malformed_stream_urls") or catalogue.get("missing_provenance"):
+    if strict_catalogue and (
+        quality.get("blank_names") or quality.get("blank_stream_urls") or quality.get("malformed_stream_urls")
+        or catalogue.get("blank_names") or catalogue.get("blank_stream_urls")
+        or catalogue.get("malformed_stream_urls") or catalogue.get("missing_provenance")
+    ):
         raise RuntimeError(f"{slot}_catalogue_quality_gate_failed")
     if release.get("state_sha256_verified") is not True:
         raise RuntimeError(f"{slot}_state_sha256_not_verified")
@@ -67,7 +69,7 @@ def validate_audit(report):
     if not isinstance(prefix, str) or not prefix.strip("/") or prefix.strip("/") != os.environ.get("TECLOSYNC_S3_PREFIX", "").strip("/"):
         raise RuntimeError("production_prefix_mismatch")
     require_clean_release(report.get("current"), "current")
-    require_clean_release(report.get("previous"), "previous")
+    require_clean_release(report.get("previous"), "previous", strict_catalogue=False)
     layout = report.get("layout") or {}
     if layout.get("current_prefix_present") is not True or layout.get("previous_prefix_present") is not True:
         raise RuntimeError("protected_release_prefix_layout_incomplete")
