@@ -101,7 +101,6 @@ class CliIntegrationTest(unittest.TestCase):
                 patch('teclosync.__main__.StateRotator') as rotator_class,
             ):
                 store = store_class.return_value
-                store.read_current_pointer.return_value = old_pointer
                 store.upload_diagnostic.return_value = 'telclosync/diagnostics/refresh-test.json'
                 rotator_class.return_value.promote.return_value = {
                     'current': {'run_id': '20260101T000000Z'},
@@ -114,6 +113,7 @@ class CliIntegrationTest(unittest.TestCase):
                     'manifest_key': 'telclosync/state/releases/previous-run/manifest.json',
                     'state_key': 'telclosync/state/releases/previous-run/teclo-sync.db',
                 }
+                store.read_current_pointer.return_value = old_pointer
                 store.download_state_database.return_value = True
                 store.publish_release.return_value = (
                     'telclosync/state/releases/20260101T000000Z/manifest.json'
