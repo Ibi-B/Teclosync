@@ -114,8 +114,11 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
         url_examples = []
         for row in conn.execute("SELECT source_id, name, stream_url FROM channels"):
             raw = row["stream_url"] or ""
-            parsed = urlsplit(raw)
-            valid = parsed.scheme.lower() in NETWORK_SCHEMES and bool(parsed.netloc or parsed.scheme in {"udp", "rtp"})
+            try:
+                parsed = urlsplit(raw)
+                valid = parsed.scheme.lower() in NETWORK_SCHEMES and bool(parsed.netloc or parsed.scheme in {"udp", "rtp"})
+            except ValueError:
+                valid = False
             if not valid:
                 bad_urls.append(row["source_id"])
                 if len(url_examples) < 20:
@@ -130,6 +133,18 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
             "urls_shared_by_multiple_sources": conn.execute(
                 "SELECT COUNT(*) FROM (SELECT stream_url FROM channels GROUP BY stream_url HAVING COUNT(DISTINCT source_id) > 1)"
             ).fetchone()[0],
+            "cross_source_url_overlap_examples": [
+                dict(r) for r in conn.execute(
+                    """SELECT stream_url, COUNT(*) AS record_count,
+                              COUNT(DISTINCT source_id) AS source_count,
+                              GROUP_CONCAT(DISTINCT source_id) AS source_ids
+                       FROM channels
+                       GROUP BY stream_url
+                       HAVING COUNT(DISTINCT source_id) > 1
+                       ORDER BY source_count DESC, record_count DESC
+                       LIMIT 20"""
+                )
+            ],
             "source_run_rows": conn.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0],
             "latest_runs": [
                 dict(r) for r in conn.execute(
@@ -176,8 +191,12 @@ def audit_catalogue(payload, expected_db_count):
         if not url:
             blank_urls += 1
         else:
-            parsed = urlsplit(url)
-            if parsed.scheme.lower() not in NETWORK_SCHEMES or not (parsed.netloc or parsed.scheme in {"udp", "rtp"}):
+            try:
+                parsed = urlsplit(url)
+                valid = parsed.scheme.lower() in NETWORK_SCHEMES and bool(parsed.netloc or parsed.scheme in {"udp", "rtp"})
+            except ValueError:
+                valid = False
+            if not valid:
                 malformed_urls += 1
                 if len(malformed_examples) < 20:
                     malformed_examples.append({"line": line_no, "source_id": source_id, "name": record.get("name"), "url": url[:180]})
@@ -230,11 +249,15 @@ def verify_release(s3, bucket, base, slot, pointer):
             text = body.decode("utf-8", errors="replace").splitlines()
             item["m3u_entries"] = sum(1 for line in text if line.startswith("#EXTINF:"))
             item["manifest_channel_count"] = artifact.get("channel_count")
+            if item["m3u_entries"] != item["manifest_channel_count"]:
+                raise RuntimeError(f"{slot}_m3u_entry_count_mismatch:{relative}")
         artifact_results.append(item)
     state_bytes = s3.get_object(Bucket=bucket, Key=state_key)["Body"].read()
     state_hash = sha256(state_bytes)
     expected_state_hash = pointer.get("state_sha256")
-    if expected_state_hash and state_hash != expected_state_hash:
+    if not expected_state_hash:
+        raise RuntimeError(f"{slot}_state_hash_missing")
+    if state_hash != expected_state_hash:
         raise RuntimeError(f"{slot}_state_hash_mismatch")
     if catalogue_payload is None:
         raise RuntimeError(f"{slot}_catalogue_artifact_missing")
@@ -264,8 +287,12 @@ def verify_release(s3, bucket, base, slot, pointer):
 def inspect_lifecycle_rules(bucket):
     token = os.environ.get("CLOUDFLARE_API_TOKEN")
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not account_id:
+        endpoint_host = urlsplit(os.environ.get("TECLOSYNC_S3_ENDPOINT", "")).hostname or ""
+        if endpoint_host.endswith(".r2.cloudflarestorage.com"):
+            account_id = endpoint_host.split(".", 1)[0]
     if not token or not account_id:
-        return {"status": "not_configured", "required": ["CLOUDFLARE_API_TOKEN secret", "CLOUDFLARE_ACCOUNT_ID repository variable"]}
+        return {"status": "not_configured", "required": ["CLOUDFLARE_API_TOKEN secret; account ID is derived from TECLOSYNC_S3_ENDPOINT when possible"]}
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/r2/buckets/{bucket}/lifecycle"
     request = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     with urlopen(request, timeout=30) as response:
@@ -308,6 +335,10 @@ def inspect_lifecycle_rules(bucket):
         "rule_count": len(output),
         "rules": output,
         "blocking_protected_prefix_rules": blocking,
+        "existing_archive_expiry_rules": [
+            item for item in output
+            if item["delete_rule"] and item["prefix"] == f"{base}/archive/"
+        ],
         "safe_to_add_archive_only_expiry": not blocking,
     }
 
@@ -352,8 +383,13 @@ def run():
         run_id = pointer.get("run_id") if isinstance(pointer, dict) else None
         manifest_key = pointer.get("manifest_key") if isinstance(pointer, dict) else None
         state_key = pointer.get("state_key") if isinstance(pointer, dict) else None
-        valid = bool(run_id and manifest_key and state_key and
-                     manifest_key.startswith(archive_prefix) and state_key.startswith(archive_prefix))
+        valid = bool(
+            run_id and manifest_key and state_key
+            and manifest_key.startswith(archive_prefix)
+            and state_key.startswith(archive_prefix)
+            and manifest_key in keys
+            and state_key in keys
+        )
         archive_pointers.append({"key": key, "run_id": run_id, "references_valid_archive_objects": valid})
     report["archive"] = {
         "object_count": len(archive_objects),
