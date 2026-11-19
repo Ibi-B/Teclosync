@@ -58,9 +58,11 @@ async def fetch_text(session, source):
 def ingest_m3u(source, source_url, text, retrieved_at, diagnostics=None):
     records = []
     rejected = []
+    rejected_count = 0
     for entry in parse_m3u(text.splitlines(), source['id']):
         record = normalize_m3u_entry(entry, source, source_url, retrieved_at)
         if not is_usable_stream_url(record['stream_url']):
+            rejected_count += 1
             if len(rejected) < 20:
                 rejected.append({
                     'source_record_index': entry.source_record_index,
@@ -71,10 +73,7 @@ def ingest_m3u(source, source_url, text, retrieved_at, diagnostics=None):
             continue
         records.append(record)
     if diagnostics is not None:
-        diagnostics['rejected_stream_count'] = sum(
-            1 for entry in parse_m3u(text.splitlines(), source['id'])
-            if not is_usable_stream_url(entry.url)
-        )
+        diagnostics['rejected_stream_count'] = rejected_count
         diagnostics['rejected_stream_examples'] = rejected
     return records
 
