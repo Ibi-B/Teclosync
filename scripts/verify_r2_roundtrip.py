@@ -181,7 +181,11 @@ def main():
 
             assert_release_is_readable(store, current, 3)
             assert_release_is_readable(store, previous, 2)
-            result['checks'].append('current and previous artifact/state restore with SHA-256')
+            archived = store.read_pointer('archive/check-1/pointer.json')
+            if archived is None:
+                raise RuntimeError('archived_release_pointer_missing')
+            assert_release_is_readable(store, archived, 1)
+            result['checks'].append('current, previous, and archived artifact/state restore with SHA-256')
 
             failing_store = AmbiguousCurrentWrite(store, 'check-4')
             try:
@@ -203,6 +207,7 @@ def main():
             # until the complete verification has succeeded.
             store.delete_prefix('current/check-4')
             store.delete_prefix('previous/check-3')
+            store.delete_prefix('staging/check-4')
 
         result['success'] = True
         result['completed_at'] = datetime.now(timezone.utc).isoformat()
