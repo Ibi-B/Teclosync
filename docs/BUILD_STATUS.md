@@ -45,7 +45,7 @@ The refresh command now uploads its diagnostic JSON to `TECLOSYNC_DIAGNOSTICS_PR
 
 GitHub Actions validation compiles all Python sources, validates the source registry, and runs the complete unit suite.
 
-The latest branch run is [44630096537](https://github.com/Ibi-B/Teclosync/actions/runs/44630096537) on commit `836cbd015a67e1aa77261e2d3c2597ca2884a2ca`: Python compilation, configuration validation, and **59 unit tests** all passed. The live-R2 script is included in Python compilation; its real bucket execution remains a separate manual workflow.
+The latest completed branch validation is [44641276943](https://github.com/Ibi-B/Teclosync/actions/runs/44641276943) on commit `6de6589c9938726a41fbe42920e15a4ab012007b`: Python compilation, configuration validation, and **60 unit tests** all passed. It includes the 30-day archive manager and production/diagnostics storage-footprint audit code. The live-R2 production audit remains a separate manual workflow.
 
 ## Isolated live R2 verification
 
