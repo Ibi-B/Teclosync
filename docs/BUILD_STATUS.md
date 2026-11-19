@@ -26,9 +26,9 @@ The feature branch contains the Teclosync foundation: source registry, M3U inges
 
 ## Static and CI validation
 
-The feature branch's validation workflow now compiles all Python sources, validates source configuration, and runs the full unit-test suite.
+The feature branch's validation workflow compiles all Python sources, validates source configuration, and runs the full unit-test suite.
 
-On 19 November 2026, the current branch passed GitHub Actions validation with **56 unit tests**. The successful run is [44624386592](https://github.com/Ibi-B/Teclosync/actions/runs/44624386592). The branch head at that validation was `214dd0ed139081cadaa920b24ba1fb06d00103c8`.
+On 19 November 2026, GitHub Actions passed all three gates on commit `8a42895a187d1c5cc6049a22080eea534116270c`: Python compilation, configuration validation, and **56 unit tests**. The successful run is [44624822133](https://github.com/Ibi-B/Teclosync/actions/runs/44624822133).
 
 This is CI evidence using test fixtures and mocked object storage. It does not establish that live Cloudflare R2 restore/publication has worked.
 
