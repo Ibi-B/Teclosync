@@ -1,4 +1,23 @@
 from urllib.parse import urlsplit
+
+
+NETWORK_SCHEMES = {'http', 'https', 'rtmp', 'rtmps', 'rtsp', 'mms', 'mmsh', 'udp', 'rtp', 'srt'}
+
+
+def is_usable_stream_url(value: str) -> bool:
+    """Reject placeholder text and malformed endpoints before catalogue publication."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    candidate = value.strip()
+    if candidate.startswith('[') and candidate.endswith(']'):
+        return False
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in NETWORK_SCHEMES and bool(
+        parsed.netloc or parsed.scheme.lower() in {'udp', 'rtp'}
+    )
 from teclosync.parsers.m3u import M3UEntry
 
 def normalize_m3u_entry(entry: M3UEntry, source: dict, source_url: str, retrieved_at: str) -> dict:
