@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely add a 90-day archive-only Cloudflare R2 lifecycle rule."""
+"""Safely add a 30-day archive-only Cloudflare R2 lifecycle rule."""
 import argparse
 import json
 import os
@@ -9,8 +9,9 @@ from urllib.request import Request, urlopen
 
 AUDIT_REPORT = Path("state/diagnostics/production-r2-audit.json")
 RESULT_REPORT = Path("state/diagnostics/archive-lifecycle-result.json")
-RULE_ID = "teclosync-archive-90-days"
-AGE_SECONDS = 90 * 24 * 60 * 60
+RULE_ID = "teclosync-archive-30-days"
+ARCHIVE_RETENTION_DAYS = 30
+AGE_SECONDS = ARCHIVE_RETENTION_DAYS * 24 * 60 * 60
 
 
 def api_call(method, url, token, payload=None):
@@ -86,10 +87,10 @@ def validate_audit(report):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apply", action="store_true", help="Apply the archive-only 90-day rule after all safety gates pass")
+    parser.add_argument("--apply", action="store_true", help="Apply the archive-only 30-day rule after all safety gates pass")
     args = parser.parse_args()
     RESULT_REPORT.parent.mkdir(parents=True, exist_ok=True)
-    result = {"applied": False, "rule_id": RULE_ID, "days": 90}
+    result = {"applied": False, "rule_id": RULE_ID, "days": ARCHIVE_RETENTION_DAYS}
     try:
         audit = json.loads(AUDIT_REPORT.read_text(encoding="utf-8"))
         base, lifecycle_snapshot = validate_audit(audit)
