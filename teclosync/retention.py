@@ -46,13 +46,11 @@ class StateRotator:
         )
         next_current_pointer = self.store.copy_release(new_release_pointer, 'current')
 
-        previous_pointer_written = False
         try:
             if next_previous_pointer:
                 self.store.write_pointer(self.PREVIOUS_POINTER, next_previous_pointer)
             else:
                 self.store.delete_pointer(self.PREVIOUS_POINTER)
-            previous_pointer_written = True
             self.store.write_pointer(self.CURRENT_POINTER, next_current_pointer)
         except Exception as publication_error:
             rollback_errors = []
@@ -60,11 +58,12 @@ class StateRotator:
                 self._restore_pointer(self.CURRENT_POINTER, current_pointer)
             except Exception as error:
                 rollback_errors.append(f'current:{error}')
-            if previous_pointer_written:
-                try:
-                    self._restore_pointer(self.PREVIOUS_POINTER, previous_pointer)
-                except Exception as error:
-                    rollback_errors.append(f'previous:{error}')
+            # A failed write/read-back may have committed remotely. Always
+            # restore both slots, not only writes that returned successfully.
+            try:
+                self._restore_pointer(self.PREVIOUS_POINTER, previous_pointer)
+            except Exception as error:
+                rollback_errors.append(f'previous:{error}')
             if rollback_errors:
                 raise ExternalStateError(
                     'release_promotion_failed_and_rollback_failed: '
