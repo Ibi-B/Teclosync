@@ -161,7 +161,7 @@ def main():
 
             current = store.read_current_pointer()
             previous = store.read_previous_pointer()
-            if current != third['current'] or previous != second['previous']:
+            if current != third['current'] or previous != third['previous']:
                 raise RuntimeError('current_previous_pointer_rotation_mismatch')
             result['checks'].append('current and previous release rotation')
 
