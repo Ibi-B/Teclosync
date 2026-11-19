@@ -63,6 +63,50 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(database.source_channel_count('test-source'), 2)
             self.assertEqual(database.channel_count(), 2)
 
+    def test_foreign_keys_are_enforced_on_each_connection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = StagingDatabase(Path(directory) / 'state.db')
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                database.begin_source_run(
+                    'missing-source',
+                    'run-1',
+                    '2026-01-01T00:00:00Z',
+                )
+
+    def test_register_source_upsert_preserves_existing_channels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = self.setup_database(directory)
+            database.replace_source_channels(
+                'test-source',
+                'run-1',
+                [self.record(1)],
+            )
+
+            updated_source = dict(self.source(), name='Updated Source')
+            database.register_source(updated_source)
+
+            self.assertEqual(database.source_channel_count('test-source'), 1)
+            self.assertEqual(database.channel_count(), 1)
+
+    def test_begin_source_run_upsert_preserves_existing_channels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = self.setup_database(directory)
+            database.replace_source_channels(
+                'test-source',
+                'run-1',
+                [self.record(1)],
+            )
+
+            database.begin_source_run(
+                'test-source',
+                'run-1',
+                '2026-01-02T00:00:00Z',
+            )
+
+            self.assertEqual(database.source_channel_count('test-source'), 1)
+            self.assertEqual(database.channel_count(), 1)
+
     def test_source_replacement_preserves_other_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             database = self.setup_database(directory)
