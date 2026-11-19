@@ -391,14 +391,27 @@ def run():
     if not current_pointer:
         raise RuntimeError("production_current_pointer_not_found")
 
+    legacy_current_key = f"{base}/current.json"
+    legacy_previous_key = f"{base}/previous.json"
+    legacy_current_pointer = get_json(s3, bucket, legacy_current_key) if legacy_current_key in keys else None
+    legacy_previous_pointer = get_json(s3, bucket, legacy_previous_key) if legacy_previous_key in keys else None
+    release_staging_objects = [
+        {"key": obj["Key"], "bytes": obj.get("Size"), "last_modified": obj.get("LastModified").isoformat() if obj.get("LastModified") else None}
+        for obj in objects if obj["Key"].startswith(f"{base}/releases/")
+    ]
     report = {
         "bucket": bucket,
         "production_prefix": base,
         "read_only": True,
         "listed_object_count": len(objects),
         "top_level_prefix_object_counts": dict(top),
-        "legacy_root_current_pointer_present": f"{base}/current.json" in keys,
-        "legacy_root_previous_pointer_present": f"{base}/previous.json" in keys,
+        "legacy_root_current_pointer_present": legacy_current_pointer is not None,
+        "legacy_root_previous_pointer_present": legacy_previous_pointer is not None,
+        "legacy_root_current_pointer_run_id": legacy_current_pointer.get("run_id") if isinstance(legacy_current_pointer, dict) else None,
+        "canonical_current_pointer_run_id": current_pointer.get("run_id") if isinstance(current_pointer, dict) else None,
+        "legacy_root_current_pointer_matches_canonical": legacy_current_pointer == current_pointer,
+        "legacy_root_previous_pointer_run_id": legacy_previous_pointer.get("run_id") if isinstance(legacy_previous_pointer, dict) else None,
+        "release_staging_objects": release_staging_objects,
         "current": verify_release(s3, bucket, base, "current", current_pointer),
         "previous": verify_release(s3, bucket, base, "previous", previous_pointer) if previous_pointer else None,
     }
