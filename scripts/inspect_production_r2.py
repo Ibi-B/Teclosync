@@ -377,8 +377,23 @@ def run():
     s3 = client_from_env()
     root = base + "/"
     objects = list_all(s3, bucket, root)
-    top = Counter(obj["Key"][len(root):].split("/", 1)[0] for obj in objects)
+    top = Counter()
+    top_bytes = Counter()
+    for obj in objects:
+        relative = obj["Key"][len(root):]
+        group = relative.split("/", 1)[0]
+        top[group] += 1
+        top_bytes[group] += int(obj.get("Size", 0) or 0)
+    state_bytes = sum(int(obj.get("Size", 0) or 0) for obj in objects)
     keys = {obj["Key"] for obj in objects}
+
+    diagnostics_prefix = os.environ.get("TECLOSYNC_DIAGNOSTICS_PREFIX", "").strip("/")
+    diagnostics_objects = []
+    if diagnostics_prefix:
+        if diagnostics_prefix == base or diagnostics_prefix.startswith(root) or base.startswith(diagnostics_prefix + "/"):
+            raise RuntimeError("diagnostics_prefix_must_be_separate_from_production_prefix")
+        diagnostics_objects = list_all(s3, bucket, diagnostics_prefix + "/")
+    diagnostics_bytes = sum(int(obj.get("Size", 0) or 0) for obj in diagnostics_objects)
 
     current_key = f"{base}/current/current.json"
     previous_key = f"{base}/previous/current.json"
@@ -408,6 +423,30 @@ def run():
         "lifecycle": lifecycle,
         "listed_object_count": len(objects),
         "top_level_prefix_object_counts": dict(top),
+        "storage_usage": {
+            "production_prefix": {
+                "prefix": base,
+                "object_count": len(objects),
+                "total_bytes": state_bytes,
+                "decimal_gb": round(state_bytes / 1_000_000_000, 6),
+                "bytes_by_top_level": dict(top_bytes),
+            },
+            "diagnostics_prefix": (
+                {
+                    "prefix": diagnostics_prefix,
+                    "object_count": len(diagnostics_objects),
+                    "total_bytes": diagnostics_bytes,
+                    "decimal_gb": round(diagnostics_bytes / 1_000_000_000, 6),
+                }
+                if diagnostics_prefix else None
+            ),
+            "combined_teclosync_bytes": state_bytes + diagnostics_bytes if diagnostics_prefix else None,
+            "combined_teclosync_decimal_gb": (
+                round((state_bytes + diagnostics_bytes) / 1_000_000_000, 6)
+                if diagnostics_prefix else None
+            ),
+            "cloudflare_standard_storage_free_allowance_decimal_gb": 10,
+        },
         "legacy_root_current_pointer_present": legacy_current_pointer is not None,
         "legacy_root_previous_pointer_present": legacy_previous_pointer is not None,
         "legacy_root_current_pointer_run_id": legacy_current_pointer.get("run_id") if isinstance(legacy_current_pointer, dict) else None,
