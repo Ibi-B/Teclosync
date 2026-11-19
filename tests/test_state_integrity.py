@@ -125,6 +125,27 @@ class StatePointerTest(unittest.TestCase):
             store.client.get_object.side_effect = error
             self.assertFalse(store.download_state_database(Path(directory) / 'state.db'))
 
+    def test_missing_pointer_snapshot_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SnapshotStore(
+                'bucket',
+                'https://example.test',
+                'access',
+                'secret',
+                prefix='telclosync/state',
+            )
+            store.client = FakeClient()
+            error = FakeClient.exceptions.ClientError()
+            error.response = {'Error': {'Code': 'NoSuchKey'}}
+            store.client.get_object.side_effect = error
+            snapshot_key = 'telclosync/state/releases/previous-run/teclo-sync.db'
+
+            with self.assertRaisesRegex(ExternalStateError, 'state_snapshot_missing'):
+                store.download_state_database(
+                    Path(directory) / 'state.db',
+                    key=snapshot_key,
+                )
+
 
 class PointerRollbackTest(unittest.TestCase):
     class AmbiguousStore:
@@ -190,8 +211,6 @@ class PointerRollbackTest(unittest.TestCase):
 
         self.assertEqual(store.current, previous)
         self.assertEqual(store.calls, ['previous.json'])
-
-
 
 
 if __name__ == '__main__':
