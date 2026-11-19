@@ -58,6 +58,8 @@ def source_freshness(database, sources, refresh_result):
             'accepted_record_count': result.get('record_count', 0),
             'source_record_count': result.get('source_record_count', 0),
             'duplicate_count': result.get('duplicate_count', 0),
+            'rejected_stream_count': result.get('rejected_stream_count', 0),
+            'rejected_stream_examples': result.get('rejected_stream_examples', []),
             'reason': result.get('reason'),
         })
     return statuses
