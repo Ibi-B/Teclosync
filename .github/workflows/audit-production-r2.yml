@@ -1,0 +1,54 @@
+name: Audit Teclosync production R2 layout and catalogue
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch containing the read-only production audit
+        required: true
+        type: choice
+        default: feature/teelosync-foundation
+        options:
+          - feature/teelosync-foundation
+
+permissions:
+  contents: read
+
+jobs:
+  audit-production-r2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out audit implementation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify production R2 layout and catalogue (read-only)
+        env:
+          PYTHONPATH: .
+          TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
+          TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
+          TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
+          TECLOSYNC_S3_ACCESS_KEY_ID: ${{ secrets.TECLOSYNC_S3_ACCESS_KEY_ID }}
+          TECLOSYNC_S3_SECRET_ACCESS_KEY: ${{ secrets.TECLOSYNC_S3_SECRET_ACCESS_KEY }}
+        run: python scripts/inspect_production_r2.py
+
+      - name: Upload production audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: teclosync-production-r2-audit
+          path: state/diagnostics/production-r2-audit.json
+          if-no-files-found: warn
+          retention-days: 14
