@@ -94,7 +94,7 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
             dict(r) for r in conn.execute(
                 """SELECT s.source_id, s.name, s.category, s.format,
                           COUNT(c.channel_key) AS channel_count,
-                          SUM(CASE WHEN c.name IS NULL OR trim(c.name) = '' THEN 1 ELSE 0 END) AS blank_names,
+                          SUM(CASE WHEN c.channel_key IS NOT NULL AND (c.name IS NULL OR trim(c.name) = '') THEN 1 ELSE 0 END) AS blank_names,
                           SUM(CASE WHEN c.tvg_logo IS NOT NULL AND trim(c.tvg_logo) <> '' THEN 1 ELSE 0 END) AS with_logo,
                           SUM(CASE WHEN c.country IS NOT NULL AND trim(c.country) <> '' THEN 1 ELSE 0 END) AS with_country,
                           SUM(CASE WHEN c.language IS NOT NULL AND trim(c.language) <> '' THEN 1 ELSE 0 END) AS with_language,
@@ -156,7 +156,11 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
                 )
             ],
         }
-        result["catalogue"] = audit_catalogue(catalogue_bytes, total)
+        database_keys = {
+            (row["source_id"], row["channel_key"])
+            for row in conn.execute("SELECT source_id, channel_key FROM channels")
+        }
+        result["catalogue"] = audit_catalogue(catalogue_bytes, total, database_keys)
         conn.close()
     finally:
         try:
@@ -166,7 +170,7 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
     return result
 
 
-def audit_catalogue(payload, expected_db_count):
+def audit_catalogue(payload, expected_db_count, database_keys):
     stream = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload))
     records = 0
     blank_names = 0
@@ -175,6 +179,9 @@ def audit_catalogue(payload, expected_db_count):
     missing_provenance = 0
     source_counts = Counter()
     malformed_examples = []
+    catalogue_keys = set()
+    duplicate_catalogue_keys = 0
+    missing_catalogue_keys = 0
     for line_no, raw in enumerate(io.BufferedReader(stream), 1):
         if not raw.strip():
             continue
@@ -185,6 +192,14 @@ def audit_catalogue(payload, expected_db_count):
             raise RuntimeError(f"catalogue_jsonl_invalid_at_line_{line_no}:{type(error).__name__}") from error
         source_id = record.get("source_id") or "(missing)"
         source_counts[source_id] += 1
+        channel_key = record.get("channel_key")
+        if not channel_key:
+            missing_catalogue_keys += 1
+        else:
+            key = (source_id, channel_key)
+            if key in catalogue_keys:
+                duplicate_catalogue_keys += 1
+            catalogue_keys.add(key)
         if not str(record.get("name") or "").strip():
             blank_names += 1
         url = str(record.get("stream_url") or "").strip()
@@ -206,6 +221,11 @@ def audit_catalogue(payload, expected_db_count):
     return {
         "record_count": records,
         "matches_database_count": records == expected_db_count,
+        "missing_database_records": len(database_keys - catalogue_keys),
+        "catalogue_only_records": len(catalogue_keys - database_keys),
+        "missing_channel_keys": missing_catalogue_keys,
+        "duplicate_catalogue_keys": duplicate_catalogue_keys,
+        "matches_database_keys": database_keys == catalogue_keys and not missing_catalogue_keys and not duplicate_catalogue_keys,
         "blank_names": blank_names,
         "blank_stream_urls": blank_urls,
         "malformed_stream_urls": malformed_urls,
