@@ -46,7 +46,7 @@ class RefreshTests(unittest.TestCase):
 
     def test_placeholder_streams_are_excluded_and_reported(self):
         m3u = (
-            '#EXTM3U\\n'
+            '#EXTM3U\n'
             '#EXTINF:-1,Playable\nhttps://example.org/live.m3u8\n'
             '#EXTINF:-1,Unavailable\n[NO PUBLIC STREAM]\n'
         )
