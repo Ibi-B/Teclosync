@@ -246,6 +246,9 @@ def verify_release(s3, bucket, base, slot, pointer):
     expected_slot_prefix = f"{base.rstrip('/')}/{slot}/"
     if not manifest_key.startswith(expected_slot_prefix) or not state_key.startswith(expected_slot_prefix):
         raise RuntimeError(f"{slot}_pointer_references_wrong_slot")
+    release_prefix = manifest_key.rsplit("/", 1)[0]
+    if release_prefix.rsplit("/", 1)[-1] != str(run_id) or state_key != f"{release_prefix}/teclo-sync.db":
+        raise RuntimeError(f"{slot}_pointer_release_path_mismatch")
     manifest_bytes = s3.get_object(Bucket=bucket, Key=manifest_key)["Body"].read()
     manifest = json.loads(manifest_bytes)
     if manifest.get("run_id") != run_id or not isinstance(manifest.get("artifacts"), list):
@@ -410,6 +413,13 @@ def run():
             and manifest_key in keys
             and state_key in keys
         )
+        if valid:
+            expected_release_prefix = f"{archive_prefix}{run_id}/"
+            valid = (
+                key == f"{expected_release_prefix}pointer.json"
+                and manifest_key == f"{expected_release_prefix}manifest.json"
+                and state_key == f"{expected_release_prefix}teclo-sync.db"
+            )
         archive_pointers.append({"key": key, "run_id": run_id, "references_valid_archive_objects": valid})
     report["archive"] = {
         "object_count": len(archive_objects),
