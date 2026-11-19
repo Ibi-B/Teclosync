@@ -11,7 +11,7 @@ on:
         options:
           - feature/teelosync-foundation
       apply_archive_expiry:
-        description: Apply the 90-day expiry rule to the configured archive/ prefix only after audit safety gates pass
+        description: Apply the 30-day expiry rule to the configured archive/ prefix only after audit safety gates pass
         required: true
         type: boolean
         default: false
@@ -44,6 +44,7 @@ jobs:
       - name: Verify production R2 layout and catalogue (read-only)
         env:
           PYTHONPATH: .
+          TECLOSYNC_DIAGNOSTICS_PREFIX: ${{ vars.TECLOSYNC_DIAGNOSTICS_PREFIX }}
           TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
           TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
           TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
