@@ -54,6 +54,12 @@ class SnapshotStore:
             payload = self.download_to_bytes(object_key)
         except self.client.exceptions.ClientError as error:
             if self._missing_key(error):
+                if key:
+                    # A pointer to an immutable snapshot is authoritative. Do not
+                    # silently start from an empty database if that snapshot vanished.
+                    raise ExternalStateError(
+                        f'state_snapshot_missing:{object_key}'
+                    ) from error
                 return False
             raise
         path = Path(local_path)
