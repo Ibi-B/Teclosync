@@ -19,8 +19,8 @@ def sha256_file(path):
 
 
 def write_m3u(path, records):
-    with open(path, 'w', encoding='utf-8', newline='\n') as stream:
-        stream.write('#EXTM3U\n')
+    with open(path, 'w', encoding='utf-8', newline='\\n') as stream:
+        stream.write('#EXTM3U\\n')
         for record in records:
             attributes = []
             if record['tvg_id']:
@@ -31,9 +31,11 @@ def write_m3u(path, records):
                 attributes.append(f'tvg-logo="{record["tvg_logo"]}"')
             if record['group_title']:
                 attributes.append(f'group-title="{record["group_title"]}"')
-            prefix = ','.join(attributes)
-            stream.write(f'#EXTINF:-1 {prefix},{record["name"]}\n')
-            stream.write(f'{record["stream_url"]}\n')
+            # Extended M3U attributes are space-delimited; the comma separates
+            # the attribute block from the display name.
+            prefix = ' '.join(attributes)
+            stream.write(f'#EXTINF:-1 {prefix},{record["name"]}\\n')
+            stream.write(f'{record["stream_url"]}\\n')
 
 
 def write_jsonl_zst(path, records):
@@ -41,7 +43,7 @@ def write_jsonl_zst(path, records):
     with open(path, 'wb') as stream:
         with compressor.stream_writer(stream) as writer:
             for record in records:
-                writer.write((json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n').encode('utf-8'))
+                writer.write((json.dumps(record, ensure_ascii=False, sort_keys=True) + '\\n').encode('utf-8'))
 
 
 def build_artifacts(database, output_dir, run_id, epg_source_path=None, source_status=None):
