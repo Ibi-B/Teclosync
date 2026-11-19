@@ -1,44 +1,72 @@
 # Teclosync implementation status
 
-The feature branch contains the Teclosync foundation: source registry, M3U ingestion, SQLite staging, bounded refresh, validation, XMLTV parsing support, artifact building, verified R2-compatible storage, and controlled manual workflows.
+The feature branch contains the Teclosync ingestion and release foundation: source registry, M3U ingestion, SQLite staging, bounded refresh, source-level validation, artifact building, checksummed R2 storage, release rotation, and manual verification workflows.
 
 ## Data-integrity work completed
 
 - M3U entry fingerprints cover source ID, display name, stream URL, and parsed metadata attributes.
-- Exact repeated records within one source are separated from distinct stream or metadata variants.
-- The first exact record remains in the channel table; every repeated occurrence is retained with its source-run, record-index, full-record, and provenance data in `channel_duplicates`.
-- Duplicate evidence is retained for successful and under-threshold rejected refreshes.
-- Minimum source counts are checked after exact duplicates are excluded, before replacing the source's last-good channel set.
+- Exact repeats within one source are separated from distinct stream or metadata variants.
+- The first exact record remains in `channels`; repeated occurrences retain full record and provenance in `channel_duplicates`, including under-threshold rejected refreshes.
+- Minimum source counts are checked after exact duplicates are excluded and before last-good rows are replaced.
 - Parser and SQLite integrity failures include actionable diagnostics.
-- Release manifests report source accepted-record, raw-record, and duplicate counts.
-- Existing SQLite databases receive the duplicate-audit table through the normal schema initialization path.
-- SQLite foreign-key enforcement is enabled on every staging database connection. Source and run registration use conflict-safe updates rather than delete-and-reinsert operations.
+- Release manifests report accepted, raw, and duplicate counts per source.
+- Existing SQLite databases receive the duplicate-audit table through schema initialization.
+- SQLite foreign-key enforcement is enabled on every connection. Source/run registration uses conflict-safe updates so it does not delete rows referenced by existing channel data.
+- Extended M3U output uses space-delimited metadata attributes and a comma before the display name.
 
-## Publication and recovery work completed
+## R2 release lifecycle implemented
 
-- The state database is uploaded to an immutable run-specific release key and verified by SHA-256.
-- `current.json` references both the published manifest and the exact state database snapshot used by that release.
-- Subsequent refreshes restore the database referenced by `current.json`; legacy pointers without a state key use the prior fixed state-object path for compatibility.
-- If a pointer-referenced immutable state snapshot is missing, restore now fails closed rather than proceeding with a potentially empty database.
-- The previous pointer is preserved before current-pointer promotion. If current-pointer verification fails, Teclosync attempts to restore the last-known-good pointer.
-- Automated tests cover failed state upload, ambiguous current-pointer write failure, rollback, missing pointer-referenced state, duplicate handling, database migration, source isolation, foreign-key constraints, and upsert safety.
-- M3U artifact output now separates metadata attributes with spaces, as required by Extended M3U, and includes an exact-format regression test.
+New refreshes upload a complete release to a temporary `releases/<run-id>/` prefix and verify its artifacts, manifest, and SQLite snapshot before promotion.
 
-## Static and CI validation
+The rotator then maintains complete, run-scoped release packages:
 
-The feature branch's validation workflow compiles all Python sources, validates source configuration, and runs the full unit-test suite.
+- `current/<run-id>/` — newest published release.
+- `previous/<run-id>/` — immediately previous good release.
+- `archive/<run-id>/` — the release displaced from the previous-good slot.
+- `current/current.json` and `previous/current.json` — the active pointers for those slots.
+- `archive/<run-id>/pointer.json` — archived release pointer metadata.
+- `releases/<run-id>/` — temporary upload area, removed after successful promotion.
 
-On 19 November 2026, GitHub Actions passed all three gates on commit `8a42895a187d1c5cc6049a22080eea534116270c`: Python compilation, configuration validation, and **56 unit tests**. The successful run is [44624822133](https://github.com/Ibi-B/Teclosync/actions/runs/44624822133).
+Each copied artifact, manifest, and state database is read back and SHA-256 verified. The current pointer stores the state database checksum, and a subsequent restore verifies that checksum before replacing the local SQLite file. Missing or corrupted pointer-referenced snapshots fail closed.
 
-This is CI evidence using test fixtures and mocked object storage. It does not establish that live Cloudflare R2 restore/publication has worked.
+Pointer promotion handles ambiguous object-store writes: if the object write commits but its read-back fails, both current and previous pointers are restored. Source packages are not removed until the new pointers have been verified. Cleanup failures are reported without invalidating a successful promotion.
 
-## Not production-verified or intentionally deferred
+The rotation keeps current and previous snapshots out of the archive lifecycle. Configure the Cloudflare R2 expiration rule only for:
 
-- A controlled live R2 restore/publication verification remains required. It must check snapshot restore, artifact and manifest upload/read-back, state snapshot upload/read-back, current/previous pointer promotion, and rollback behaviour in an isolated test prefix or bucket.
-- The remaining catalogue inspection is outstanding. Passing tests prove pipeline behaviour on fixtures, not that every upstream record is correctly attributed, unique, playable, or suitable for publication.
-- Keep the refresh workflow manual-only. Do not enable scheduling, automatic source discovery, or R2 lifecycle expiration.
-- `teclosync/retention.py` is scaffolding, not an operational retention implementation: its rotator calls a `publish_manifest` method that the current snapshot store does not provide, and `prune_archive` performs no deletion. Do not invoke it or configure lifecycle expiry on its behalf.
-- EPG sources remain disabled; XMLTV parser support is not EPG activation.
+`<TECLOSYNC_S3_PREFIX>/archive/` — expire objects after 90 days.
+
+Do not apply expiration to `current/`, `previous/`, or the separate diagnostics prefix. The lifecycle rule itself is a bucket setting and has not been changed from this repository.
+
+## Diagnostics
+
+The refresh command now uploads its diagnostic JSON to `TECLOSYNC_DIAGNOSTICS_PREFIX/refresh-<run-id>.json` and also retains the GitHub Actions artifact. When no explicit diagnostics prefix is supplied, it uses `<TECLOSYNC_S3_PREFIX>/diagnostics/`. A diagnostics upload failure is recorded locally and does not reverse an otherwise successful release promotion.
+
+## Validation status
+
+GitHub Actions validation compiles all Python sources, validates the source registry, and runs the complete unit suite.
+
+The latest recorded successful run before the R2 verification script refinement is [44629668080](https://github.com/Ibi-B/Teclosync/actions/runs/44629668080): Python compilation, configuration validation, and **59 unit tests** all passed. The latest targeted checks cover state restore checksum failure, preservation of the existing local state file, release-package copy verification, diagnostics upload, current/previous/archive rotation, and ambiguous-write rollback.
+
+## Isolated live R2 verification
+
+A manual workflow is available at `.github/workflows/verify-r2.yml`. It runs `scripts/verify_r2_roundtrip.py` against a unique `telclosync/verification/<workflow-run-id>/` prefix. It does not read, overwrite, or rotate production pointers.
+
+The live check creates four tiny test releases and verifies:
+- upload and read-back of the manifest, M3U artifact, and SQLite snapshot;
+- current/previous rotation and archived-release creation;
+- SHA-256 validation when restoring current, previous, and archived SQLite snapshots;
+- rollback after simulating an ambiguous current-pointer write;
+- removal of the temporary verification prefix after a successful run.
+
+The manual R2 workflow has not yet been run. It requires the existing R2 repository variables and secrets to be available to GitHub Actions.
+
+## Separate legacy workflow
+
+The scheduled `Refresh video catalog` workflow on `main` remains a separate failing legacy pipeline: its configured source catalogue currently produces no video items. It is not part of this Teclosync R2 round-trip test or the new feature-branch validation workflow; migrate or retire it separately rather than weakening the Teclosync checks.
+
+## Deferred scope
+
+- EPG sources remain disabled. XMLTV parser support is not EPG activation.
 - Cross-provider canonical station reconciliation is not implemented. Preserve source records and alternatives until a conservative identity model is designed.
-- The legacy `Refresh video catalog` scheduled workflow on `main` is separately failing because its build produces no video items. That is distinct from this feature branch's validation workflow and should be migrated or retired separately.
-- Do not merge this foundation into `main` until live restore/publication verification and the remaining catalogue inspection are complete.
+- Keep refresh manual-only; do not enable scheduled ingestion or automatic source discovery.
+- Do not merge this foundation to `main` until the isolated live R2 workflow succeeds, the R2 archive-only 90-day lifecycle rule is configured, and the remaining catalogue inspection is complete.
