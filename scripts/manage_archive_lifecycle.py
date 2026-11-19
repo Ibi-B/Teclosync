@@ -50,6 +50,8 @@ def require_clean_release(release, slot):
         raise RuntimeError(f"{slot}_catalogue_has_invalid_channel_fields")
     if catalogue.get("record_count") != state.get("database_channel_count") or not catalogue.get("matches_database_count"):
         raise RuntimeError(f"{slot}_catalogue_record_count_mismatch")
+    if catalogue.get("matches_database_keys") is not True:
+        raise RuntimeError(f"{slot}_catalogue_database_key_mismatch")
     if catalogue.get("blank_names") or catalogue.get("blank_stream_urls") or catalogue.get("malformed_stream_urls") or catalogue.get("missing_provenance"):
         raise RuntimeError(f"{slot}_catalogue_quality_gate_failed")
     if release.get("state_sha256_verified") is not True:
