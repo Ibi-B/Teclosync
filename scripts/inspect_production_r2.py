@@ -391,6 +391,8 @@ def run():
     if not current_pointer:
         raise RuntimeError("production_current_pointer_not_found")
 
+    lifecycle = inspect_lifecycle_rules(bucket)
+
     legacy_current_key = f"{base}/current.json"
     legacy_previous_key = f"{base}/previous.json"
     legacy_current_pointer = get_json(s3, bucket, legacy_current_key) if legacy_current_key in keys else None
@@ -403,6 +405,7 @@ def run():
         "bucket": bucket,
         "production_prefix": base,
         "read_only": True,
+        "lifecycle": lifecycle,
         "listed_object_count": len(objects),
         "top_level_prefix_object_counts": dict(top),
         "legacy_root_current_pointer_present": legacy_current_pointer is not None,
