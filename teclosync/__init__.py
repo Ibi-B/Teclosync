@@ -1,0 +1,1 @@
+"""Teclosync ingestion foundation."""

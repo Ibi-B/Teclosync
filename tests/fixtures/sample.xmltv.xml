@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="example.se"><display-name>Example TV</display-name></channel>
+  <programme start="20260101080000 +0000" stop="20260101090000 +0000" channel="example.se">
+    <title>Morning News</title><desc>Local news</desc>
+  </programme>
+  <programme start="20260101090000 +0000" stop="20260101100000 +0000" channel="example.se">
+    <title>Midday News</title><desc>More news</desc>
+  </programme>
+</tv>
