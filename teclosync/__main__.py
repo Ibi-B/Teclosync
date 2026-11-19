@@ -33,12 +33,6 @@ def persist_diagnostics(path, payload, store, run_id):
         )
         payload['diagnostics_object_key'] = key
         write_diagnostics(path, payload)
-        # Refresh the object so the uploaded copy includes its own object key.
-        store.upload_diagnostic(
-            path,
-            run_id,
-            diagnostics_prefix=os.environ.get('TECLOSYNC_DIAGNOSTICS_PREFIX'),
-        )
     except Exception as error:
         payload['diagnostics_upload_error'] = f'{type(error).__name__}: {error}'
         write_diagnostics(path, payload)
