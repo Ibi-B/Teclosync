@@ -9,6 +9,7 @@ import sys
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 import boto3
 import zstandard
@@ -257,6 +258,57 @@ def verify_release(s3, bucket, base, slot, pointer):
         "source_statuses": sources,
         "source_count_mismatches": source_count_mismatches,
         "database_and_catalogue": state,
+    }
+
+
+def inspect_lifecycle_rules(bucket):
+    token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not token or not account_id:
+        return {"status": "not_configured", "required": ["CLOUDFLARE_API_TOKEN secret", "CLOUDFLARE_ACCOUNT_ID repository variable"]}
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/r2/buckets/{bucket}/lifecycle"
+    request = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    with urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read())
+    if not payload.get("success"):
+        raise RuntimeError("cloudflare_lifecycle_read_failed")
+    rules = payload.get("result", {}).get("rules", [])
+    base = os.environ["TECLOSYNC_S3_PREFIX"].strip("/")
+    protected = [f"{base}/current/", f"{base}/previous/"]
+    output = []
+    blocking = []
+    for rule in rules:
+        conditions = rule.get("conditions") or {}
+        prefix = conditions.get("prefix", "")
+        transition = rule.get("deleteObjectsTransition") or {}
+        condition = transition.get("condition") or {}
+        enabled = rule.get("enabled") is True
+        delete_rule = enabled and bool(transition)
+        overlaps_protected = any(
+            not prefix or protected_prefix.startswith(prefix) or prefix.startswith(protected_prefix)
+            for protected_prefix in protected
+        )
+        item = {
+            "id": rule.get("id"),
+            "enabled": enabled,
+            "prefix": prefix,
+            "delete_after_days": (
+                condition.get("maxAge") / 86400
+                if condition.get("type") == "Age" and isinstance(condition.get("maxAge"), (int, float))
+                else None
+            ),
+            "delete_rule": delete_rule,
+            "overlaps_current_or_previous": bool(delete_rule and overlaps_protected),
+        }
+        output.append(item)
+        if item["overlaps_current_or_previous"]:
+            blocking.append(item["id"])
+    return {
+        "status": "inspected",
+        "rule_count": len(output),
+        "rules": output,
+        "blocking_protected_prefix_rules": blocking,
+        "safe_to_add_archive_only_expiry": not blocking,
     }
 
 
