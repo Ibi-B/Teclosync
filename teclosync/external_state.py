@@ -128,13 +128,31 @@ class SnapshotStore:
             raise ExternalStateError(f'pointer_invalid_shape:{name}')
         return pointer
 
+    def _read_canonical_slot_pointer(self, slot, legacy_name):
+        pointer = self.read_pointer(f'{slot}/current.json')
+        if pointer is not None:
+            return pointer
+
+        # A root-level pointer is migration residue, not a valid recovery source.
+        # Refuse to resurrect it and fail closed if slot payloads exist without a
+        # canonical pointer; the operator must repair the pointer from a verified
+        # snapshot instead of silently rotating from incomplete state.
+        if self.read_pointer(legacy_name) is not None:
+            raise ExternalStateError(f'{slot}_canonical_pointer_missing_legacy_pointer_present')
+        response = self.client.list_objects_v2(
+            Bucket=self.bucket,
+            Prefix=self.object_key(f'{slot}/') + '/',
+            MaxKeys=1,
+        )
+        if response.get('Contents'):
+            raise ExternalStateError(f'{slot}_canonical_pointer_missing_slot_objects_present')
+        return None
+
     def read_current_pointer(self):
-        # Canonical slot pointers are authoritative. A stale root-level pointer
-        # must never resurrect an archived release if the canonical pointer is lost.
-        return self.read_pointer('current/current.json')
+        return self._read_canonical_slot_pointer('current', 'current.json')
 
     def read_previous_pointer(self):
-        return self.read_pointer('previous/current.json')
+        return self._read_canonical_slot_pointer('previous', 'previous.json')
 
     def write_pointer(self, name, payload):
         key = self.object_key(name)
