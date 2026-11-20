@@ -255,10 +255,15 @@ def plan_cleanup(s3, bucket, base, audit_report):
             skipped.append({"object": key, "reason": f"{type(error).__name__}: {error}"})
 
     legacy_state_key = f"{base}/state/teclo-sync.db"
-    legacy_state_payload = (
-        read_object(s3, bucket, legacy_state_key)
-        if legacy_state_key in keys else None
-    )
+    legacy_state_payload = None
+    if legacy_state_key in keys:
+        try:
+            legacy_state_payload = read_object(s3, bucket, legacy_state_key)
+        except Exception as error:
+            skipped.append({
+                "object": legacy_state_key,
+                "reason": f"legacy_database_unavailable_for_compatibility_checks: {type(error).__name__}: {error}",
+            })
 
     # Remove only root compatibility pointers whose actual manifest and effective
     # state target resolve byte-for-byte to an immutable retained release.
@@ -268,6 +273,7 @@ def plan_cleanup(s3, bucket, base, audit_report):
     }
     legacy_pointer_reports = []
     safe_legacy_keys = []
+    unsafe_legacy_payloads = {}
     for key in sorted(legacy_keys):
         try:
             pointer = json.loads(read_object(s3, bucket, key))
@@ -277,17 +283,25 @@ def plan_cleanup(s3, bucket, base, audit_report):
             legacy_pointer_reports.append(report)
             safe_legacy_keys.append(key)
         except Exception as error:
+            try:
+                unsafe_legacy_payloads[key] = json.loads(read_object(s3, bucket, key))
+            except Exception:
+                unsafe_legacy_payloads[key] = {}
             skipped.append({"object": key, "reason": f"{type(error).__name__}: {error}"})
 
-    # Unknown pointer-like objects protect their referenced staging release.
-    # They are preserved and reported rather than blocking unrelated cleanup.
+    # Unknown or unresolved pointer-like objects protect their referenced staging
+    # release. They are preserved rather than blocking unrelated cleanup.
     protected_staging_runs = set()
     for item in objects:
         key = item["Key"]
-        if not key.endswith(".json") or key in legacy_keys:
+        if not key.endswith(".json") or key in safe_legacy_keys:
             continue
         try:
-            payload = json.loads(read_object(s3, bucket, key))
+            payload = (
+                unsafe_legacy_payloads[key]
+                if key in unsafe_legacy_payloads
+                else json.loads(read_object(s3, bucket, key))
+            )
         except (TypeError, ValueError):
             continue
         if not isinstance(payload, dict):
@@ -315,7 +329,13 @@ def plan_cleanup(s3, bucket, base, audit_report):
         if filename in staging_groups[run_id]:
             skipped.append({"object": key, "reason": "duplicate_staging_path"})
             continue
-        staging_groups[run_id][filename] = read_object(s3, bucket, key)
+        try:
+            staging_groups[run_id][filename] = read_object(s3, bucket, key)
+        except Exception as error:
+            skipped.append({
+                "object": key,
+                "reason": f"staging_object_unavailable: {type(error).__name__}: {error}",
+            })
 
     staging_reports = []
     staging_delete_keys = []
