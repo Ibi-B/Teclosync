@@ -1,3 +1,41 @@
+
+
+## Current production status — 20 November 2026
+
+This section supersedes earlier point-in-time notes below where they say the live audit or lifecycle policy is still pending.
+
+### Verified Cloudflare lifecycle policy
+
+Production audit and apply run [44648240346](https://github.com/Ibi-B/Teclosync/actions/runs/44648240346) completed successfully. The audit artifact confirms that Cloudflare has the enabled rule `teclosync-archive-30-days` scoped exclusively to `telclosync/state/archive/`, with a 30-day age threshold (2,592,000 seconds). The rule was applied and read back successfully. The pre-existing `Default Multipart Abort Rule` was preserved. No expiry rule overlaps `current/` or `previous/`.
+
+The same run verified current release `20261119T234644Z` and previous release `20261119T224927Z`: snapshot and artifact checksums passed, current SQLite integrity and foreign-key checks passed, and the current catalogue reconciled exactly to the database at 26,934 records with zero missing provenance, duplicate keys, blank names, or blank stream URLs.
+
+Measured storage was 917,065,937 bytes under `telclosync/state` and 49,785 bytes under the separate diagnostics prefix, approximately 0.917 GB combined. This is below the configured 10 GB Standard-storage free allowance used for the operational comparison.
+
+### Legacy pointer and staging cleanup — guarded, not yet executed
+
+The audit exposed one stale root compatibility pointer, `telclosync/state/current.json`, which references archived release `20261118T195146Z` instead of canonical current `20261119T234644Z`. Runtime state access has now been changed to use canonical slot pointers only and to fail closed if canonical pointers are missing while legacy pointers or slot objects remain. The unsafe non-pointer `state/teclo-sync.db` recovery fallback was removed; that legacy object is retained as a forensic copy until separately reviewed.
+
+A guarded cleanup script, `scripts/cleanup_production_r2.py`, was added. It requires a successful fresh read-only audit; independently verifies current, previous, and archived manifest/artifact/state bytes; checks legacy pointer targets; groups temporary `releases/<run-id>/` objects; and only schedules exact staging objects whose complete object sets and bytes match an immutable retained copy. The older `20261118T195146Z` staging package lacks its own SQLite object; cleanup will proceed only if the retained archive database is byte-identical to the legacy state snapshot. Any mismatch, unknown pointer, unexpected object, or changed audit pointer aborts cleanup. The script deletes only the two known root compatibility pointer keys and the exact verified staging object keys; it preserves `telclosync/state/state/teclo-sync.db`.
+
+The `main` branch audit workflow now has a separate `cleanup_legacy_objects` manual input (default false), serializes against refresh via the `teclosync-r2-production` concurrency group, runs the guarded cleanup only when explicitly selected, and re-audits after cleanup. The feature-branch refresh workflow uses the same concurrency group. **The production cleanup has not yet been dispatched or applied.** Run the audit workflow with `source_ref=feature/teelosync-foundation`, `apply_archive_expiry=false`, and `cleanup_legacy_objects=true`, then inspect the cleanup report and post-cleanup audit before declaring the layout clean.
+
+The feature branch currently passes compilation, configuration validation, and 69 unit tests in [validation run 44650317811](https://github.com/Ibi-B/Teclosync/actions/runs/44650317811).
+
+### Remaining upstream source issues
+
+The latest controlled refresh continues to preserve 29 healthy sources and reports four upstream failures. They are separate from R2 storage and lifecycle:
+
+- Cineverse — `ValueError: EXTINF without following stream URL`.
+- Whale TV Plus — `ValueError: Stream URL without preceding EXTINF`.
+- Samsung TV Plus Nordic Sweden — `ValueError: Stream URL without preceding EXTINF`.
+- JRomero88 VOD — HTTP 404.
+
+The Apsattv streams index still lists Cineverse and Whale TV Plus (the page describes these feeds as updated 22 April 2026), and lists the manually compiled Samsung Sweden playlist under non-app-region feeds. The playlist parser errors should be handled by a tested, bounded recovery strategy that never pairs an orphan URL with the wrong station. Do not silently relax parsing or publish misattributed records.
+
+The JRomero88 repository currently documents `VOD.m3u` in its README, but the live `master` tree does not contain that file; the branch commit shown by GitHub is dated 30 August 2021. The repository's `IPTV.m3u` is a separate legacy general-TV playlist, not a verified VOD replacement. Do not repoint the VOD source to it. Keep the failed source visible until an authentic VOD feed is found or the source owner confirms the correct location.
+
+No source was silently removed or replaced during this storage-maintenance work. Cross-provider provenance and distinct records remain intact.
 # Teclosync implementation status
 
 The feature branch contains the Teclosync ingestion and release foundation: source registry, M3U ingestion, SQLite staging, bounded refresh, source-level validation, artifact building, checksummed R2 storage, release rotation, and manual verification workflows.
