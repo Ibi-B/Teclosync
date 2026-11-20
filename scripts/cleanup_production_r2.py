@@ -140,6 +140,37 @@ def verify_staging_copy(run_id, staging_objects, retained_release, legacy_state_
     return sum(len(payload) for payload in staging_objects.values())
 
 
+def validate_legacy_pointer_reference(base, key, pointer, retained):
+    if not isinstance(pointer, dict):
+        raise RuntimeError(f"legacy_pointer_invalid_shape:{key}")
+    run_id = pointer.get("run_id")
+    if not isinstance(run_id, str) or run_id not in retained:
+        raise RuntimeError(f"legacy_pointer_release_not_retained:{key}:{run_id}")
+    release = retained[run_id]
+    slot_prefix = f"{base}/{release['slot']}/{run_id}/"
+    staging_prefix = f"{base}/releases/{run_id}/"
+    manifest_key = pointer.get("manifest_key")
+    state_key = pointer.get("state_key")
+    allowed_pairs = (
+        (slot_prefix + "manifest.json", slot_prefix + "teclo-sync.db"),
+        (staging_prefix + "manifest.json", staging_prefix + "teclo-sync.db"),
+    )
+    if (manifest_key, state_key) not in allowed_pairs:
+        raise RuntimeError(f"legacy_pointer_reference_path_mismatch:{key}")
+    pointer_state_hash = pointer.get("state_sha256")
+    retained_state_hash = release["pointer"].get("state_sha256")
+    if pointer_state_hash and pointer_state_hash != retained_state_hash:
+        raise RuntimeError(f"legacy_pointer_state_hash_mismatch:{key}")
+    return {
+        "key": key,
+        "run_id": run_id,
+        "retained_slot": release["slot"],
+        "manifest_key": manifest_key,
+        "state_key": state_key,
+        "scheduled_for_removal": True,
+    }
+
+
 def validate_initial_audit(report, base):
     if report.get("success") is not True or report.get("read_only") is not True:
         raise RuntimeError("successful_read_only_production_audit_required")
@@ -212,17 +243,9 @@ def plan_cleanup(s3, bucket, base, audit_report):
             payload = json.loads(read_object(s3, bucket, key))
         except (TypeError, ValueError) as error:
             raise RuntimeError(f"legacy_pointer_invalid_json:{key}") from error
-        if not isinstance(payload, dict) or not payload.get("manifest_key") or not payload.get("state_key"):
-            raise RuntimeError(f"legacy_pointer_invalid_shape:{key}")
-        run_id = payload.get("run_id")
-        if run_id not in retained:
-            raise RuntimeError(f"legacy_pointer_release_not_retained:{key}:{run_id}")
-        legacy_pointer_reports.append({
-            "key": key,
-            "run_id": run_id,
-            "retained_slot": retained[run_id]["slot"],
-            "scheduled_for_removal": True,
-        })
+        legacy_pointer_reports.append(
+            validate_legacy_pointer_reference(base, key, payload, retained)
+        )
 
     for item in objects:
         key = item["Key"]
