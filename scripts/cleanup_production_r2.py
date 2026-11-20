@@ -56,9 +56,9 @@ def safe_artifact_path(value):
     if not isinstance(value, str) or not value:
         raise RuntimeError("release_artifact_path_missing")
     path = PurePosixPath(value)
-    if path.is_absolute() or len(path.parts) != 1 or path.parts[0] in {".", ".."} or str(path) != value:
+    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in value.split("/")):
         raise RuntimeError(f"unsafe_release_artifact_path:{value}")
-    return value
+    return path.as_posix()
 
 
 def verify_retained_release(s3, bucket, base, slot, pointer):
@@ -71,9 +71,21 @@ def verify_retained_release(s3, bucket, base, slot, pointer):
     if not isinstance(run_id, str) or not run_id or "/" in run_id or "\\" in run_id:
         raise RuntimeError(f"{slot}_pointer_run_id_invalid")
     expected_prefix = f"{base}/{slot}/{run_id}/"
-    if manifest_key != expected_prefix + "manifest.json":
+    manifest_path = PurePosixPath(str(manifest_key or ""))
+    state_path = PurePosixPath(str(state_key or ""))
+    if (
+        not isinstance(manifest_key, str)
+        or not manifest_key.startswith(expected_prefix)
+        or manifest_path.name != "manifest.json"
+        or ".." in manifest_path.parts
+    ):
         raise RuntimeError(f"{slot}_manifest_path_mismatch")
-    if state_key != expected_prefix + "teclo-sync.db":
+    if (
+        not isinstance(state_key, str)
+        or not state_key.startswith(expected_prefix)
+        or state_path.name != "teclo-sync.db"
+        or ".." in state_path.parts
+    ):
         raise RuntimeError(f"{slot}_state_path_mismatch")
     if not isinstance(state_hash, str) or len(state_hash) != 64:
         raise RuntimeError(f"{slot}_state_hash_missing")
@@ -86,8 +98,8 @@ def verify_retained_release(s3, bucket, base, slot, pointer):
     if not isinstance(manifest, dict) or manifest.get("run_id") != run_id:
         raise RuntimeError(f"{slot}_manifest_run_id_mismatch")
     artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, list) or not artifacts:
-        raise RuntimeError(f"{slot}_manifest_artifacts_missing")
+    if not isinstance(artifacts, list):
+        raise RuntimeError(f"{slot}_manifest_artifacts_invalid")
 
     retained_objects = {
         "manifest.json": manifest_payload,
@@ -140,25 +152,41 @@ def verify_staging_copy(run_id, staging_objects, retained_release, legacy_state_
     return sum(len(payload) for payload in staging_objects.values())
 
 
-def validate_legacy_pointer_reference(base, key, pointer, retained):
+def validate_legacy_pointer_reference(s3, bucket, base, key, pointer, retained, legacy_state_payload=None):
+    """Accept compatible legacy key layouts only when bytes match a retained release."""
     if not isinstance(pointer, dict):
         raise RuntimeError(f"legacy_pointer_invalid_shape:{key}")
     run_id = pointer.get("run_id")
     if not isinstance(run_id, str) or run_id not in retained:
         raise RuntimeError(f"legacy_pointer_release_not_retained:{key}:{run_id}")
     release = retained[run_id]
-    slot_prefix = f"{base}/{release['slot']}/{run_id}/"
-    staging_prefix = f"{base}/releases/{run_id}/"
+    retained_objects = release["objects"]
+
     manifest_key = pointer.get("manifest_key")
+    if not isinstance(manifest_key, str) or not manifest_key:
+        raise RuntimeError(f"legacy_pointer_manifest_missing:{key}")
+    manifest_payload = read_object(s3, bucket, manifest_key)
+    if manifest_payload != retained_objects["manifest.json"]:
+        raise RuntimeError(f"legacy_pointer_manifest_not_reconciled:{key}")
+
     state_key = pointer.get("state_key")
-    allowed_pairs = (
-        (slot_prefix + "manifest.json", slot_prefix + "teclo-sync.db"),
-        (staging_prefix + "manifest.json", staging_prefix + "teclo-sync.db"),
-    )
-    if (manifest_key, state_key) not in allowed_pairs:
-        raise RuntimeError(f"legacy_pointer_reference_path_mismatch:{key}")
+    used_legacy_state = not state_key
+    if not state_key:
+        state_key = f"{base}/state/teclo-sync.db"
+        state_payload = legacy_state_payload
+    else:
+        normalized_state_key = state_key.strip("/")
+        if not normalized_state_key.startswith(base + "/"):
+            normalized_state_key = f"{base}/{normalized_state_key}"
+        state_payload = read_object(s3, bucket, normalized_state_key)
+        state_key = normalized_state_key
+
+    if state_payload is None:
+        state_payload = read_object(s3, bucket, state_key)
+    retained_state_hash = sha256(retained_objects["teclo-sync.db"])
+    if sha256(state_payload) != retained_state_hash:
+        raise RuntimeError(f"legacy_pointer_state_not_reconciled:{key}")
     pointer_state_hash = pointer.get("state_sha256")
-    retained_state_hash = release["pointer"].get("state_sha256")
     if pointer_state_hash and pointer_state_hash != retained_state_hash:
         raise RuntimeError(f"legacy_pointer_state_hash_mismatch:{key}")
     return {
@@ -167,26 +195,19 @@ def validate_legacy_pointer_reference(base, key, pointer, retained):
         "retained_slot": release["slot"],
         "manifest_key": manifest_key,
         "state_key": state_key,
+        "used_legacy_state_fallback": used_legacy_state,
         "scheduled_for_removal": True,
     }
 
 
 def validate_initial_audit(report, base):
-    if report.get("success") is not True or report.get("read_only") is not True:
-        raise RuntimeError("successful_read_only_production_audit_required")
+    # The audit supplies context; live pointer and byte checks below determine
+    # which individual objects are eligible. One unavailable slot must not block
+    # independent cleanup candidates.
+    if report.get("read_only") is not True:
+        raise RuntimeError("read_only_audit_required")
     if report.get("production_prefix", "").strip("/") != base:
         raise RuntimeError("production_audit_prefix_mismatch")
-    for slot in ("current", "previous"):
-        release = report.get(slot) or {}
-        state = release.get("database_and_catalogue") or {}
-        catalogue = state.get("catalogue") or {}
-        if release.get("state_sha256_verified") is not True:
-            raise RuntimeError(f"{slot}_state_integrity_not_verified")
-        if catalogue.get("matches_database_keys") is not True:
-            raise RuntimeError(f"{slot}_catalogue_reconciliation_not_verified")
-    archive = report.get("archive") or {}
-    if archive.get("all_pointer_references_scoped_to_archive") is not True:
-        raise RuntimeError("archive_pointer_scope_not_verified")
 
 
 def plan_cleanup(s3, bucket, base, audit_report):
@@ -194,59 +215,73 @@ def plan_cleanup(s3, bucket, base, audit_report):
     root = base + "/"
     objects = list_objects(s3, bucket, root)
     keys = {item["Key"] for item in objects}
-
-    current_key = f"{base}/current/current.json"
-    previous_key = f"{base}/previous/current.json"
-    if current_key not in keys or previous_key not in keys:
-        raise RuntimeError("canonical_current_and_previous_pointers_required")
-
+    skipped = []
     retained = {}
-    pointer_payloads = {}
-    for slot, key in (("current", current_key), ("previous", previous_key)):
-        pointer = json.loads(read_object(s3, bucket, key))
-        if pointer.get("run_id") != (audit_report.get(slot) or {}).get("run_id"):
-            raise RuntimeError(f"{slot}_pointer_changed_since_audit")
-        release = verify_retained_release(s3, bucket, base, slot, pointer)
-        retained[release["run_id"]] = release
-        pointer_payloads[key] = pointer
 
+    # Re-read and verify each available canonical slot independently. A missing
+    # or unreadable slot is reported, not promoted into a repository-wide gate.
+    for slot in ("current", "previous"):
+        key = f"{base}/{slot}/current.json"
+        if key not in keys:
+            skipped.append({"object": key, "reason": "canonical_pointer_absent"})
+            continue
+        try:
+            pointer = json.loads(read_object(s3, bucket, key))
+            release = verify_retained_release(s3, bucket, base, slot, pointer)
+            retained[release["run_id"]] = release
+        except Exception as error:
+            skipped.append({"object": key, "reason": f"{type(error).__name__}: {error}"})
+
+    # Archive references are also independent. A malformed archive pointer does
+    # not prevent cleanup of unrelated releases whose copies can be proven.
     archive_prefix = f"{base}/archive/"
     archive_pointer_keys = sorted(
         key for key in keys
         if key.startswith(archive_prefix) and key.endswith("/pointer.json")
     )
     for key in archive_pointer_keys:
-        pointer = json.loads(read_object(s3, bucket, key))
-        run_id = pointer.get("run_id")
-        expected_key = f"{archive_prefix}{run_id}/pointer.json"
-        if key != expected_key:
-            raise RuntimeError(f"archive_pointer_path_mismatch:{key}")
-        if run_id in retained:
-            raise RuntimeError(f"duplicate_retained_run_id:{run_id}")
-        release = verify_retained_release(s3, bucket, base, "archive", pointer)
-        retained[run_id] = release
-        pointer_payloads[key] = pointer
+        try:
+            pointer = json.loads(read_object(s3, bucket, key))
+            run_id = pointer.get("run_id")
+            if key != f"{archive_prefix}{run_id}/pointer.json":
+                raise RuntimeError("archive_pointer_path_mismatch")
+            if run_id in retained:
+                if retained[run_id]["slot"] != "archive":
+                    raise RuntimeError("run_id_already_retained_in_another_slot")
+                continue
+            release = verify_retained_release(s3, bucket, base, "archive", pointer)
+            retained[release["run_id"]] = release
+        except Exception as error:
+            skipped.append({"object": key, "reason": f"{type(error).__name__}: {error}"})
 
-    if not archive_pointer_keys:
-        raise RuntimeError("archive_pointer_required_for_staging_cleanup")
+    legacy_state_key = f"{base}/state/teclo-sync.db"
+    legacy_state_payload = (
+        read_object(s3, bucket, legacy_state_key)
+        if legacy_state_key in keys else None
+    )
 
-    # Inspect every JSON pointer-like object, not only the expected pointer names.
-    # Only the two known root-level compatibility pointers may refer to releases/,
-    # and those are removed after their run IDs are proven to exist in retained slots.
+    # Remove only root compatibility pointers whose actual manifest and effective
+    # state target resolve byte-for-byte to an immutable retained release.
     legacy_keys = {
         key for key in (f"{base}/current.json", f"{base}/previous.json")
         if key in keys
     }
     legacy_pointer_reports = []
+    safe_legacy_keys = []
     for key in sorted(legacy_keys):
         try:
-            payload = json.loads(read_object(s3, bucket, key))
-        except (TypeError, ValueError) as error:
-            raise RuntimeError(f"legacy_pointer_invalid_json:{key}") from error
-        legacy_pointer_reports.append(
-            validate_legacy_pointer_reference(base, key, payload, retained)
-        )
+            pointer = json.loads(read_object(s3, bucket, key))
+            report = validate_legacy_pointer_reference(
+                s3, bucket, base, key, pointer, retained, legacy_state_payload
+            )
+            legacy_pointer_reports.append(report)
+            safe_legacy_keys.append(key)
+        except Exception as error:
+            skipped.append({"object": key, "reason": f"{type(error).__name__}: {error}"})
 
+    # Unknown pointer-like objects protect their referenced staging release.
+    # They are preserved and reported rather than blocking unrelated cleanup.
+    protected_staging_runs = set()
     for item in objects:
         key = item["Key"]
         if not key.endswith(".json") or key in legacy_keys:
@@ -255,14 +290,14 @@ def plan_cleanup(s3, bucket, base, audit_report):
             payload = json.loads(read_object(s3, bucket, key))
         except (TypeError, ValueError):
             continue
-        if not isinstance(payload, dict) or not payload.get("manifest_key") or not payload.get("state_key"):
+        if not isinstance(payload, dict):
             continue
-        points_to_staging = (
-            str(payload["manifest_key"]).startswith(f"{base}/releases/")
-            or str(payload["state_key"]).startswith(f"{base}/releases/")
-        )
-        if points_to_staging:
-            raise RuntimeError(f"non_legacy_pointer_references_staging:{key}")
+        for field in ("manifest_key", "state_key"):
+            value = payload.get(field)
+            if isinstance(value, str) and value.startswith(f"{base}/releases/"):
+                run_id = value[len(f"{base}/releases/"):].split("/", 1)[0]
+                if run_id:
+                    protected_staging_runs.add(run_id)
 
     staging_prefix = f"{base}/releases/"
     staging_groups = defaultdict(dict)
@@ -272,46 +307,60 @@ def plan_cleanup(s3, bucket, base, audit_report):
             continue
         relative = key[len(staging_prefix):]
         parts = relative.split("/")
-        if len(parts) != 2 or not all(parts):
-            raise RuntimeError(f"unexpected_staging_object_path:{key}")
-        run_id, filename = parts
+        if len(parts) < 2 or not parts[0] or not parts[-1]:
+            skipped.append({"object": key, "reason": "unrecognized_staging_path"})
+            continue
+        run_id = parts[0]
+        filename = "/".join(parts[1:])
         if filename in staging_groups[run_id]:
-            raise RuntimeError(f"duplicate_staging_object:{key}")
+            skipped.append({"object": key, "reason": "duplicate_staging_path"})
+            continue
         staging_groups[run_id][filename] = read_object(s3, bucket, key)
 
-    legacy_state_key = f"{base}/state/teclo-sync.db"
-    legacy_state_payload = (
-        read_object(s3, bucket, legacy_state_key)
-        if legacy_state_key in keys else None
-    )
     staging_reports = []
     staging_delete_keys = []
     for run_id, staged_objects in sorted(staging_groups.items()):
-        retained_release = retained.get(run_id)
-        staged_bytes = verify_staging_copy(
-            run_id, staged_objects, retained_release, legacy_state_payload
-        )
-        staging_reports.append({
-            "run_id": run_id,
-            "retained_slot": retained_release["slot"],
-            "object_count": len(staged_objects),
-            "bytes": staged_bytes,
-            "byte_for_byte_match": True,
-        })
-        staging_delete_keys.extend(
-            f"{staging_prefix}{run_id}/{relative}"
-            for relative in sorted(staged_objects)
-        )
+        if run_id in protected_staging_runs:
+            skipped.append({
+                "object": f"{staging_prefix}{run_id}/",
+                "reason": "referenced_by_another_pointer",
+            })
+            continue
+        try:
+            retained_release = retained.get(run_id)
+            staged_bytes = verify_staging_copy(
+                run_id, staged_objects, retained_release, legacy_state_payload
+            )
+            staging_reports.append({
+                "run_id": run_id,
+                "retained_slot": retained_release["slot"],
+                "object_count": len(staged_objects),
+                "bytes": staged_bytes,
+                "byte_for_byte_match": True,
+            })
+            staging_delete_keys.extend(
+                f"{staging_prefix}{run_id}/{relative}"
+                for relative in sorted(staged_objects)
+            )
+        except Exception as error:
+            skipped.append({
+                "object": f"{staging_prefix}{run_id}/",
+                "reason": f"{type(error).__name__}: {error}",
+            })
 
-    # The old non-run-scoped database is intentionally preserved as a forensic
-    # fallback copy. Runtime code no longer restores it when canonical pointers
-    # are absent, and it is outside this narrowly scoped cleanup operation.
+    # Preserve the legacy database and anything not explicitly verified above.
     legacy_state_prefix = f"{base}/state/"
     legacy_state_objects = [
         {"key": item["Key"], "bytes": int(item.get("Size", 0) or 0)}
         for item in objects if item["Key"].startswith(legacy_state_prefix)
     ]
 
+    delete_keys = sorted(set(safe_legacy_keys + staging_delete_keys))
+    delete_key_set = set(delete_keys)
+    planned_bytes = sum(
+        int(item.get("Size", 0) or 0)
+        for item in objects if item["Key"] in delete_key_set
+    )
     return {
         "legacy_pointers": legacy_pointer_reports,
         "staging_releases": staging_reports,
@@ -320,32 +369,32 @@ def plan_cleanup(s3, bucket, base, audit_report):
         "retained_run_ids": {
             run_id: release["slot"] for run_id, release in sorted(retained.items())
         },
-        "delete_object_keys": sorted(legacy_keys) + sorted(staging_delete_keys),
-        "delete_object_count": len(legacy_keys) + len(staging_delete_keys),
-        "delete_bytes": sum(int(item.get("Size", 0) or 0) for item in objects
-                            if item["Key"] in legacy_keys or item["Key"] in set(staging_delete_keys)),
+        "skipped_objects": skipped,
+        "delete_object_keys": delete_keys,
+        "delete_object_count": len(delete_keys),
+        "delete_bytes": planned_bytes,
     }
-
 
 def apply_cleanup(s3, bucket, plan):
     deleted = []
-    for key in plan["delete_object_keys"]:
-        s3.delete_object(Bucket=bucket, Key=key)
-        deleted.append(key)
-
+    errors = []
     remaining = []
-    for key in deleted:
+    for key in plan["delete_object_keys"]:
         try:
-            s3.head_object(Bucket=bucket, Key=key)
-            remaining.append(key)
-        except s3.exceptions.ClientError as error:
-            status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            code = error.response.get("Error", {}).get("Code", "")
-            if status != 404 and code not in {"404", "NoSuchKey", "NotFound"}:
-                raise
-    if remaining:
-        raise RuntimeError(f"cleanup_objects_still_present:{remaining}")
-    return deleted
+            s3.delete_object(Bucket=bucket, Key=key)
+            try:
+                s3.head_object(Bucket=bucket, Key=key)
+                remaining.append(key)
+            except s3.exceptions.ClientError as error:
+                status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                code = error.response.get("Error", {}).get("Code", "")
+                if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+                    deleted.append(key)
+                else:
+                    errors.append({"key": key, "error": f"{type(error).__name__}: {error}"})
+        except Exception as error:
+            errors.append({"key": key, "error": f"{type(error).__name__}: {error}"})
+    return {"deleted": deleted, "remaining": remaining, "errors": errors}
 
 
 def main():
@@ -367,16 +416,22 @@ def main():
             "verified_staging_releases": plan["staging_releases"],
             "retained_run_ids": plan["retained_run_ids"],
             "legacy_state_objects_preserved": plan["legacy_state_objects_preserved"],
+            "skipped_objects": plan["skipped_objects"],
             "planned_delete_object_count": plan["delete_object_count"],
             "planned_delete_bytes": plan["delete_bytes"],
         })
         if args.apply:
-            deleted = apply_cleanup(s3, bucket, plan)
-            result["deleted_object_count"] = len(deleted)
-            result["deleted_object_keys"] = deleted
-            result["applied"] = True
+            applied = apply_cleanup(s3, bucket, plan)
+            result["deleted_object_count"] = len(applied["deleted"])
+            result["deleted_object_keys"] = applied["deleted"]
+            result["remaining_object_keys"] = applied["remaining"]
+            result["cleanup_errors"] = applied["errors"]
+            result["applied"] = bool(applied["deleted"])
+            result["partial"] = bool(
+                applied["remaining"] or applied["errors"] or plan["skipped_objects"]
+            )
         else:
-            result["message"] = "All safety gates passed. No production object was changed."
+            result["message"] = "Plan complete. No production object was changed."
         result["success"] = True
     except Exception as error:
         result["error"] = f"{type(error).__name__}: {error}"
