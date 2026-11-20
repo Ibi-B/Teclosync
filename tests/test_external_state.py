@@ -102,9 +102,18 @@ class ExternalStateTests(unittest.TestCase):
         pointer = store.read_current_pointer()
 
         self.assertIsNone(pointer)
-        store.client.get_object.assert_called_once_with(
-            Bucket='test-bucket',
-            Key='telclosync/state/current/current.json',
+        self.assertEqual(
+            store.client.get_object.call_args_list,
+            [
+                unittest.mock.call(
+                    Bucket='test-bucket',
+                    Key='telclosync/state/current/current.json',
+                ),
+                unittest.mock.call(
+                    Bucket='test-bucket',
+                    Key='telclosync/state/current.json',
+                ),
+            ],
         )
 
     def test_previous_pointer_does_not_fall_back_to_stale_root_pointer(self):
@@ -119,9 +128,18 @@ class ExternalStateTests(unittest.TestCase):
         pointer = store.read_previous_pointer()
 
         self.assertIsNone(pointer)
-        store.client.get_object.assert_called_once_with(
-            Bucket='test-bucket',
-            Key='telclosync/state/previous/current.json',
+        self.assertEqual(
+            store.client.get_object.call_args_list,
+            [
+                unittest.mock.call(
+                    Bucket='test-bucket',
+                    Key='telclosync/state/previous/current.json',
+                ),
+                unittest.mock.call(
+                    Bucket='test-bucket',
+                    Key='telclosync/state/previous.json',
+                ),
+            ],
         )
 
 
