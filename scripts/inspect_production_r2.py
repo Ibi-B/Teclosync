@@ -6,8 +6,10 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from collections import Counter
 from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -41,7 +43,10 @@ def client_from_env():
         region_name=os.environ.get("TECLOSYNC_S3_REGION", "auto"),
         aws_access_key_id=os.environ["TECLOSYNC_S3_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["TECLOSYNC_S3_SECRET_ACCESS_KEY"],
-        config=Config(retries={"max_attempts": 3}, s3={"addressing_style": "path"}),
+        config=Config(
+            retries={"mode": "adaptive", "max_attempts": 8},
+            s3={"addressing_style": "path"},
+        ),
     )
 
 
@@ -312,6 +317,35 @@ def verify_release(s3, bucket, base, slot, pointer):
     }
 
 
+def read_cloudflare_json(url, headers, max_attempts=4):
+    """Retry transient Cloudflare API failures without turning them into permanent gates."""
+    retryable_statuses = {429, 500, 502, 503, 504}
+    last_error = None
+    for attempt in range(max_attempts):
+        request = Request(url, headers=headers)
+        try:
+            with urlopen(request, timeout=30) as response:
+                return json.loads(response.read())
+        except HTTPError as error:
+            last_error = error
+            if error.code not in retryable_statuses or attempt + 1 >= max_attempts:
+                raise
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            try:
+                delay = max(0.0, min(float(retry_after), 10.0)) if retry_after else min(2 ** attempt, 8)
+            except (TypeError, ValueError):
+                delay = min(2 ** attempt, 8)
+            time.sleep(delay)
+        except URLError as error:
+            last_error = error
+            if attempt + 1 >= max_attempts:
+                raise
+            time.sleep(min(2 ** attempt, 8))
+    if last_error:
+        raise last_error
+    raise RuntimeError("cloudflare_api_request_failed")
+
+
 def inspect_lifecycle_rules(bucket):
     token = os.environ.get("CLOUDFLARE_API_TOKEN")
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
@@ -322,9 +356,8 @@ def inspect_lifecycle_rules(bucket):
     if not token or not account_id:
         return {"status": "not_configured", "required": ["CLOUDFLARE_API_TOKEN secret; account ID is derived from TECLOSYNC_S3_ENDPOINT when possible"]}
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/r2/buckets/{bucket}/lifecycle"
-    request = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-    with urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read())
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    payload = read_cloudflare_json(url, headers)
     if not payload.get("success"):
         raise RuntimeError("cloudflare_lifecycle_read_failed")
     rules = payload.get("result", {}).get("rules", [])
