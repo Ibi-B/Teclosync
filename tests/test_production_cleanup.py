@@ -3,6 +3,8 @@ import unittest
 from unittest.mock import MagicMock
 
 from scripts.cleanup_production_r2 import (
+    plan_cleanup,
+    sha256,
     validate_legacy_pointer_reference,
     verify_staging_copy,
 )
@@ -127,6 +129,124 @@ class ProductionCleanupTests(unittest.TestCase):
                 pointer,
                 self.retained,
             )
+
+
+    def build_memory_production(self, corrupt_legacy_manifest=False):
+        class MemoryPaginator:
+            def __init__(self, store):
+                self.store = store
+
+            def paginate(self, Bucket, Prefix):
+                items = [
+                    {"Key": key, "Size": len(value)}
+                    for key, value in self.store.objects.items()
+                    if key.startswith(Prefix)
+                ]
+                yield {"Contents": items}
+
+        class MemoryS3:
+            def __init__(self, objects):
+                self.objects = dict(objects)
+
+            def get_object(self, Bucket, Key):
+                return {"Body": io.BytesIO(self.objects[Key])}
+
+            def get_paginator(self, name):
+                return MemoryPaginator(self)
+
+        base = "telclosync/state"
+        objects = {}
+        releases = {}
+
+        def add_release(slot, run_id, add_staging_db=True):
+            state = f"database:{run_id}".encode()
+            artifact = f"#EXTM3U\\n# {run_id}\\n".encode()
+            manifest = (
+                __import__("json").dumps({
+                    "run_id": run_id,
+                    "artifacts": [{
+                        "path": "live.m3u8",
+                        "sha256": sha256(artifact),
+                        "bytes": len(artifact),
+                    }],
+                }, separators=(",", ":")).encode()
+            )
+            slot_prefix = f"{base}/{slot}/{run_id}/"
+            objects[slot_prefix + "manifest.json"] = manifest
+            objects[slot_prefix + "teclo-sync.db"] = state
+            objects[slot_prefix + "live.m3u8"] = artifact
+            pointer = {
+                "run_id": run_id,
+                "manifest_key": slot_prefix + "manifest.json",
+                "state_key": slot_prefix + "teclo-sync.db",
+                "state_sha256": sha256(state),
+            }
+            if slot in {"current", "previous"}:
+                objects[f"{base}/{slot}/current.json"] = __import__("json").dumps(pointer).encode()
+            else:
+                objects[f"{base}/archive/{run_id}/pointer.json"] = __import__("json").dumps(pointer).encode()
+
+            staging_prefix = f"{base}/releases/{run_id}/"
+            objects[staging_prefix + "manifest.json"] = manifest
+            objects[staging_prefix + "live.m3u8"] = artifact
+            if add_staging_db:
+                objects[staging_prefix + "teclo-sync.db"] = state
+            releases[run_id] = {
+                "pointer": pointer,
+                "state": state,
+                "manifest": manifest,
+                "artifact": artifact,
+                "staging_prefix": staging_prefix,
+            }
+            return pointer
+
+        current = add_release("current", "20261119T234644Z")
+        previous = add_release("previous", "20261119T224927Z")
+        archive = add_release("archive", "20261118T195146Z", add_staging_db=False)
+        objects[f"{base}/state/teclo-sync.db"] = archive["state"]
+        legacy_pointer = {
+            "run_id": archive["pointer"]["run_id"],
+            "manifest_key": archive["staging_prefix"] + "manifest.json",
+        }
+        if corrupt_legacy_manifest:
+            objects[legacy_pointer["manifest_key"]] = b'{"run_id":"changed"}'
+        objects[f"{base}/current.json"] = __import__("json").dumps(legacy_pointer).encode()
+        audit = {"read_only": True, "production_prefix": base}
+        return MemoryS3(objects), audit, releases
+
+    def test_cleanup_plan_handles_older_pointer_format_and_deletes_only_mirrors(self):
+        store, audit, releases = self.build_memory_production()
+
+        plan = plan_cleanup(store, "bucket", "telclosync/state", audit)
+
+        self.assertEqual(plan["delete_object_count"], 9)
+        self.assertIn("telclosync/state/current.json", plan["delete_object_keys"])
+        self.assertEqual(len(plan["staging_releases"]), 3)
+        self.assertFalse(plan["skipped_objects"])
+        self.assertIn(
+            {"key": "telclosync/state/state/teclo-sync.db", "bytes": len(releases["20261118T195146Z"]["state"])},
+            plan["legacy_state_objects_preserved"],
+        )
+        self.assertNotIn("telclosync/state/state/teclo-sync.db", plan["delete_object_keys"])
+
+    def test_one_unreconciled_legacy_pointer_does_not_block_verified_sibling_cleanup(self):
+        store, audit, releases = self.build_memory_production(corrupt_legacy_manifest=True)
+
+        plan = plan_cleanup(store, "bucket", "telclosync/state", audit)
+
+        self.assertNotIn("telclosync/state/current.json", plan["delete_object_keys"])
+        self.assertTrue(any(
+            item["object"] == "telclosync/state/current.json"
+            for item in plan["skipped_objects"]
+        ))
+        self.assertEqual(
+            {item["run_id"] for item in plan["staging_releases"]},
+            {"20261119T234644Z", "20261119T224927Z"},
+        )
+        self.assertNotIn(
+            "telclosync/state/releases/20261118T195146Z/manifest.json",
+            plan["delete_object_keys"],
+        )
 
     def test_staging_copy_without_legacy_state_file_requires_and_accepts_exact_legacy_state(self):
         staging = {
