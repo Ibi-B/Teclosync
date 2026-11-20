@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from botocore.exceptions import ClientError
+
 from teclosync.external_state import SnapshotStore, ExternalStateError
 
 
@@ -77,6 +79,49 @@ class ExternalStateTests(unittest.TestCase):
                 Key=key,
             )
 
+    def test_missing_pointer_key_does_not_restore_legacy_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.db'
+            store = self.store()
+
+            restored = store.download_state_database(path)
+
+            self.assertFalse(restored)
+            self.assertFalse(path.exists())
+            store.client.get_object.assert_not_called()
+
+    def test_current_pointer_does_not_fall_back_to_stale_root_pointer(self):
+        store = self.store()
+        store.client.exceptions.ClientError = ClientError
+        store.client.get_object.side_effect = ClientError(
+            {'Error': {'Code': 'NoSuchKey'}},
+            'GetObject',
+        )
+
+        pointer = store.read_current_pointer()
+
+        self.assertIsNone(pointer)
+        store.client.get_object.assert_called_once_with(
+            Bucket='test-bucket',
+            Key='telclosync/state/current/current.json',
+        )
+
+    def test_previous_pointer_does_not_fall_back_to_stale_root_pointer(self):
+        store = self.store()
+        store.client.exceptions.ClientError = ClientError
+        store.client.get_object.side_effect = ClientError(
+            {'Error': {'Code': 'NoSuchKey'}},
+            'GetObject',
+        )
+
+        pointer = store.read_previous_pointer()
+
+        self.assertIsNone(pointer)
+        store.client.get_object.assert_called_once_with(
+            Bucket='test-bucket',
+            Key='telclosync/state/previous/current.json',
+        )
+
     def test_manifest_verification_failure(self):
         store = self.store()
         store.client.get_object.return_value = {'Body': io.BytesIO(b'{}')}
@@ -104,7 +149,6 @@ class ExternalStateTests(unittest.TestCase):
             Body=body,
             ContentType='application/json',
         )
-
 
     def test_restore_rejects_hash_mismatch_without_replacing_existing_state(self):
         with tempfile.TemporaryDirectory() as directory:
