@@ -203,10 +203,11 @@ class ProductionCleanupTests(unittest.TestCase):
         current = add_release("current", "20261119T234644Z")
         previous = add_release("previous", "20261119T224927Z")
         archive = add_release("archive", "20261118T195146Z", add_staging_db=False)
-        objects[f"{base}/state/teclo-sync.db"] = archive["state"]
+        archive_run_id = archive["run_id"]
+        objects[f"{base}/state/teclo-sync.db"] = releases[archive_run_id]["state"]
         legacy_pointer = {
-            "run_id": archive["pointer"]["run_id"],
-            "manifest_key": archive["staging_prefix"] + "manifest.json",
+            "run_id": archive_run_id,
+            "manifest_key": releases[archive_run_id]["staging_prefix"] + "manifest.json",
         }
         if corrupt_legacy_manifest:
             objects[legacy_pointer["manifest_key"]] = b'{"run_id":"changed"}'
