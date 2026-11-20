@@ -1,3 +1,83 @@
+# Current production and implementation status — 20 November 2026
+
+This is the current operational record. Older dated sections below are historical snapshots; where they differ, the verified outcomes in this section supersede them.
+
+## Production R2 lifecycle and integrity
+
+The archive-retention policy is active and read back from Cloudflare:
+
+- Rule `teclosync-archive-30-days` is enabled for `telclosync/state/archive/` only.
+- Age threshold is 30 days (2,592,000 seconds).
+- The existing `Default Multipart Abort Rule` is preserved.
+- No deletion rule overlaps `current/` or `previous/`.
+- The lifecycle apply and read-back passed in [run 44648240346](https://github.com/Ibi-B/Teclosync/actions/runs/44648240346).
+
+The retained releases are:
+
+| Slot | Release | Verified records |
+|---|---|---:|
+| Current | `20261119T234644Z` | 26,934 |
+| Previous | `20261119T224927Z` | 26,941 |
+| Archive | `20261118T195146Z` | Older protected rollback snapshot |
+
+Post-maintenance verification confirmed SHA-256 checks for both active snapshots and their artifacts, SQLite `integrity_check=ok`, zero foreign-key violations, and exact catalogue/database key reconciliation. The archive pointer remains correctly scoped to its archived release.
+
+## Completed production housekeeping
+
+The guarded apply ran in [housekeeping run 44671376505](https://github.com/Ibi-B/Teclosync/actions/runs/44671376505). The apply step succeeded. The first post-apply audit encountered a transient Cloudflare HTTP 500; no cleanup retry was run. A separate read-only verification then passed in [run 44671877908](https://github.com/Ibi-B/Teclosync/actions/runs/44671877908).
+
+The apply removed exactly 21 objects (267,755,782 bytes):
+- The stale root compatibility pointer `telclosync/state/current.json`, which referenced the older archived release rather than canonical current.
+- Six temporary staging objects for `20261118T195146Z`.
+- Seven temporary staging objects for `20261119T224927Z`.
+- Seven temporary staging objects for `20261119T234644Z`.
+
+All three staging copies were compared byte-for-byte with their retained archive/current/previous packages before deletion. The cleanup report had zero skipped objects, zero remaining targets, and zero deletion errors. The legacy non-run-scoped database `telclosync/state/state/teclo-sync.db` was preserved; current, previous and archive snapshots were not deleted or altered.
+
+The final read-only audit verified:
+- 45 objects remain under `telclosync/state`: archive 8, current 21, previous 15, legacy state 1.
+- No root-level `current.json` or `previous.json` compatibility pointer remains.
+- No temporary `releases/` objects remain.
+- No unexpected top-level state prefixes were found.
+- Current and previous releases still pass artifact/state checksums, SQLite integrity, FK checks and exact catalogue/database reconciliation.
+- The archive pointer still resolves to the archived release.
+- The 30-day archive-only Cloudflare lifecycle rule remains enabled and does not overlap current or previous.
+
+Storage after cleanup is 649,310,155 bytes for `telclosync/state` plus 49,785 bytes for diagnostics: 649,359,940 bytes combined (about 0.649 GB). The legacy database was intentionally retained.
+
+## Adaptive operating principles
+
+Teclosync and its consumers should evolve inclusively and adaptively. These are operating defaults, not additional global release gates:
+
+1. **Prefer partial success.** Process healthy sources and records even when another provider is unavailable or has changed format. Isolate errors to the affected source/entry and preserve last-good rows.
+2. **Keep the catalogue useful.** A feed warning should not invalidate unrelated feeds. Report freshness, failure reason, rejected-entry counts and retained-last-good state; do not silently erase a source or its previous data.
+3. **Recover carefully, not rigidly.** Parser recovery may accept a bounded, well-understood variation with fixtures and diagnostics. Never pair an orphan stream URL with the wrong station. An ambiguous entry can be skipped while safely parsed entries continue.
+4. **Preserve ownership and provenance.** User-owned playlists, configuration, favourites and metadata remain additive and are never overwritten by synchronized provider catalogues. Keep provider IDs, provenance and distinct stream alternatives.
+5. **Make checks proportional to the operation.** For destructive object cleanup, verify the exact object being removed against its retained replacement. If one object cannot be reconciled, preserve and report that object while proceeding with independent verified candidates.
+6. **Use hard stops only at the point of actual integrity risk.** A missing or unverifiable snapshot may prevent restoring that snapshot; it should not disable unrelated healthy sources or make the whole product unavailable when another valid path exists. Do not turn optional metadata, a temporary provider outage or one malformed record into a universal gate.
+7. **Evolve compatibly.** Prefer additive schema changes, migration support, tolerant readers and explicit diagnostics. Keep rollback snapshots and user data safe through migrations and refactors.
+
+For BeastED integration, ChronSync A–D, Radsync, Teclosync, Viewsync and user-added IPTV capabilities remain first-class product capabilities. Shared improvements should benefit the unified application without narrowing or replacing existing user workflows.
+
+## Current source freshness
+
+The last controlled refresh published 26,934 accepted records from 29 healthy sources out of 33. Six invalid `[NO PUBLIC STREAM]` placeholders were rejected individually while 2,197 valid `free-tv-curated` records were retained. Four upstream problems remain visible and isolated:
+
+- Cineverse — M3U structure error (`EXTINF without following stream URL`).
+- Whale TV Plus — M3U structure error (`Stream URL without preceding EXTINF`).
+- Samsung TV Plus Nordic Sweden — M3U structure error (`Stream URL without preceding EXTINF`).
+- JRomero88 VOD — HTTP 404.
+
+These are source-specific follow-ups, not R2 publication or storage failures. Last-good data is retained where available. Do not remove/repoint the JRomero88 VOD source to an unrelated live-TV playlist. Parser improvements should be tested and bounded, without risking station misattribution.
+
+## Validation
+
+The latest feature-branch CI run, [44671826829](https://github.com/Ibi-B/Teclosync/actions/runs/44671826829), passed Python compilation, configuration validation and all 77 unit tests. It includes adaptive production audit retries for transient Cloudflare/R2 read failures.
+
+PR [#2](https://github.com/Ibi-B/Teclosync/pull/2) remains an open draft and has not been merged. The production R2 lifecycle and housekeeping actions are complete; remaining provider availability work should be tracked source-by-source and must not be treated as a blanket gate on healthy catalogue operation.
+
+---
+
 
 
 ## Current production status — 20 November 2026
