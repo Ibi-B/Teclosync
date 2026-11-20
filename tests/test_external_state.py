@@ -97,6 +97,7 @@ class ExternalStateTests(unittest.TestCase):
             {'Error': {'Code': 'NoSuchKey'}},
             'GetObject',
         )
+        store.client.list_objects_v2.return_value = {'Contents': []}
 
         pointer = store.read_current_pointer()
 
@@ -113,6 +114,7 @@ class ExternalStateTests(unittest.TestCase):
             {'Error': {'Code': 'NoSuchKey'}},
             'GetObject',
         )
+        store.client.list_objects_v2.return_value = {'Contents': []}
 
         pointer = store.read_previous_pointer()
 
@@ -121,6 +123,39 @@ class ExternalStateTests(unittest.TestCase):
             Bucket='test-bucket',
             Key='telclosync/state/previous/current.json',
         )
+
+
+    def test_stale_root_pointer_is_not_used_when_canonical_current_pointer_is_missing(self):
+        store = self.store()
+        store.client.exceptions.ClientError = ClientError
+
+        def get_object(Bucket, Key):
+            if Key == 'telclosync/state/current/current.json':
+                raise ClientError({'Error': {'Code': 'NoSuchKey'}}, 'GetObject')
+            return {'Body': io.BytesIO(json.dumps({
+                'run_id': 'old-run',
+                'manifest_key': 'telclosync/state/archive/old-run/manifest.json',
+                'state_key': 'telclosync/state/archive/old-run/teclo-sync.db',
+            }).encode())}
+
+        store.client.get_object.side_effect = get_object
+
+        with self.assertRaisesRegex(ExternalStateError, 'current_canonical_pointer_missing_legacy_pointer_present'):
+            store.read_current_pointer()
+
+    def test_orphaned_current_slot_objects_without_pointer_fail_closed(self):
+        store = self.store()
+        store.client.exceptions.ClientError = ClientError
+        store.client.get_object.side_effect = ClientError(
+            {'Error': {'Code': 'NoSuchKey'}},
+            'GetObject',
+        )
+        store.client.list_objects_v2.return_value = {
+            'Contents': [{'Key': 'telclosync/state/current/run-1/manifest.json'}]
+        }
+
+        with self.assertRaisesRegex(ExternalStateError, 'current_canonical_pointer_missing_slot_objects_present'):
+            store.read_current_pointer()
 
     def test_manifest_verification_failure(self):
         store = self.store()
