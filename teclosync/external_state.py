@@ -54,22 +54,20 @@ class SnapshotStore:
         return key
 
     def download_state_database(self, local_path, key=None, expected_sha256=None):
-        if key:
-            prefix = f'{self.prefix}/' if self.prefix else ''
-            object_key = key if not prefix or key.startswith(prefix) else self.object_key(key)
-        else:
-            # Backward-compatible fallback for state written before release pointers
-            # referenced immutable database snapshots.
-            object_key = self.object_key('state/teclo-sync.db')
+        # A missing canonical pointer is not permission to restore an unrelated,
+        # potentially stale database from the legacy state/ prefix. Callers must
+        # provide a verified immutable snapshot key.
+        if not key:
+            return False
+        prefix = f'{self.prefix}/' if self.prefix else ''
+        object_key = key if not prefix or key.startswith(prefix) else self.object_key(key)
         try:
             payload = self.download_to_bytes(object_key)
         except self.client.exceptions.ClientError as error:
             if self._missing_key(error):
-                if key:
-                    raise ExternalStateError(
-                        f'state_snapshot_missing:{object_key}'
-                    ) from error
-                return False
+                raise ExternalStateError(
+                    f'state_snapshot_missing:{object_key}'
+                ) from error
             raise
         actual = hashlib.sha256(payload).hexdigest()
         if expected_sha256 and actual != expected_sha256:
@@ -131,12 +129,12 @@ class SnapshotStore:
         return pointer
 
     def read_current_pointer(self):
-        pointer = self.read_pointer('current/current.json')
-        return pointer if pointer is not None else self.read_pointer('current.json')
+        # Canonical slot pointers are authoritative. A stale root-level pointer
+        # must never resurrect an archived release if the canonical pointer is lost.
+        return self.read_pointer('current/current.json')
 
     def read_previous_pointer(self):
-        pointer = self.read_pointer('previous/current.json')
-        return pointer if pointer is not None else self.read_pointer('previous.json')
+        return self.read_pointer('previous/current.json')
 
     def write_pointer(self, name, payload):
         key = self.object_key(name)
@@ -187,13 +185,11 @@ class SnapshotStore:
             self._put_verified_bytes(f'{target_prefix}/{relative_path}', payload, expected)
 
         if not state_key:
-            # Compatibility with pointers created before the database snapshot was
-            # recorded in the pointer. New publications always set this explicitly.
-            state_key = self.object_key('state/teclo-sync.db')
+            raise ExternalStateError('release_pointer_state_key_missing')
         state_payload = self.download_to_bytes(state_key)
         state_sha256 = hashlib.sha256(state_payload).hexdigest()
         expected_state_sha256 = pointer.get('state_sha256')
-        if expected_state_sha256 and state_sha256 != expected_state_sha256:
+        if not expected_state_sha256 or state_sha256 != expected_state_sha256:
             raise ExternalStateError('release_state_snapshot_hash_mismatch')
         target_state_key = f'{target_prefix}/teclo-sync.db'
         self._put_verified_bytes(target_state_key, state_payload, state_sha256)
