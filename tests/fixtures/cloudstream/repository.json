@@ -1,0 +1,7 @@
+{
+  "name": "Example CloudStream Repository",
+  "description": "Fixture repository for tests",
+  "pluginLists": [
+    "plugins.json"
+  ]
+}
