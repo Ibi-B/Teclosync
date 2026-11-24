@@ -27,6 +27,7 @@ _SENSITIVE_QUERY_KEYS = {
 }
 _PRIVATE_HOST_SUFFIXES = (
     '.localhost', '.local', '.internal', '.lan', '.home', '.home.arpa',
+    '.corp', '.intranet', '.private', '.example', '.invalid', '.test',
 )
 _PRIVATE_HOSTS = {'localhost', 'localhost.localdomain'}
 
@@ -46,7 +47,7 @@ def _has_private_or_local_host(host):
     if hostname.endswith(_PRIVATE_HOST_SUFFIXES):
         return True
     try:
-        address = ipaddress.ip_address(hostname)
+        address = ipaddress.ip_address(unquote(hostname))
     except ValueError:
         # This is a conservative syntax check. It does not resolve DNS, so it
         # cannot detect a public-looking hostname that resolves to a private IP.
@@ -63,7 +64,7 @@ def _has_credential_path(parsed):
     ):
         return True
     # Xtream-style stream paths encode username/password in the URL path.
-    return len(segments) >= 3 and segments[0].lower() in {'live', 'movie', 'series'}
+    return len(segments) >= 4 and segments[0].lower() in {'live', 'movie', 'series'}
 
 
 def _is_redistributable_url(value, allowed_schemes):
