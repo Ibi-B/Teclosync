@@ -5,7 +5,7 @@ Status: implementation added on `feature/teelosync-foundation`; first production
 ## Delivery
 
 - Public index: `https://raw.githubusercontent.com/Ibi-B/Teclosync/teclosync-public/iptv/catalogue.json`
-- Playlist files: relative paths in the index, currently `playlists/<source-id>.m3u8`.
+- Playlist files: immutable release paths in the index, `releases/<releaseId>/playlists/<source-id>.m3u8`. The root `catalogue.json` is the mutable current pointer; already-published release directories are never overwritten.
 - Published branch: `teclosync-public` (read-only delivery mirror, not the canonical state store).
 - Canonical state remains in protected Cloudflare R2 `telclosync/state/current/`, `previous/`, and `archive/` slots.
 
@@ -26,11 +26,11 @@ Each playlist entry provides:
 
 ## Public-safety boundary
 
-The export contains only source M3U files and the small index. It does not expose R2 pointers, private SQLite databases, state snapshots, write credentials, or full provenance payloads. Stream endpoints with URL userinfo or common credential-bearing query keys are excluded from the public M3U. The export is optional: if it fails, the Teclosync R2 snapshot validation and rotation continue independently. An empty public export does not replace a previously published public index.
+The export contains only source M3U files and the small index. It does not expose R2 pointers, private SQLite databases, state snapshots, write credentials, or full provenance payloads. Stream URLs are excluded when they contain URL userinfo, common credential-bearing query keys, detected Xtream-style path credentials, literal non-global IP addresses, or recognized local/private hostnames. Unsafe `tvg_logo` URLs are blanked independently; an otherwise acceptable stream row is retained. DNS is not resolved, and this scoped filter cannot guarantee that all accepted URLs are safe or authorized for redistribution. The export is optional: if it fails, Teclosync R2 snapshot validation and rotation continue independently. An empty public export does not replace a previously published public index. If the subsequent Git push fails, the workflow reports failure even though an already-completed R2 promotion is not rolled back.
 
 ## Consumer behavior
 
-BeastED reads the index with a 1 MiB response cap and a 15-second timeout. It accepts schema version 1 and only same-origin HTTPS paths matching `playlists/<id>.m3u8`. A selected playlist is loaded through the existing BeastED M3U parser and source lifecycle with ID `public-teclosync:<id>`. The IPTV-Org direct category/country browser remains as a separate fallback. No R2 credentials are stored in BeastED.
+BeastED reads the index with a 1 MiB streamed byte cap and a 15-second total request timeout; the response stream is cancelled as soon as the byte cap is exceeded. The valid index cache is scoped to the normalized catalogue endpoint (including its query) using a hashed preference key. The client accepts schema version 1 and only same-origin HTTPS paths matching `releases/<releaseId>/playlists/<id>.m3u8` for that exact index release. Displayed entry totals are recalculated from accepted playlist rows; the publisher-declared count is retained separately for diagnostics. A selected playlist is loaded through the existing BeastED M3U parser and source lifecycle with ID `public-teclosync:<id>`. The IPTV-Org direct category/country browser remains as a separate fallback. No R2 credentials are stored in BeastED.
 
 ## Initial publication
 
