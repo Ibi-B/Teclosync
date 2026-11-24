@@ -8,7 +8,7 @@ full provenance records.
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from teclosync.build import write_m3u
 
@@ -30,6 +30,16 @@ def _is_public_stream(record):
     if scheme not in _PUBLIC_SCHEMES:
         return False
     if parsed.username or parsed.password:
+        return False
+    sensitive_query_keys = {
+        'token', 'access_token', 'refresh_token', 'api_key', 'apikey',
+        'auth', 'authorization', 'password', 'passwd', 'secret',
+        'signature', 'sig', 'jwt', 'key',
+    }
+    if any(
+        key.lower() in sensitive_query_keys
+        for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    ):
         return False
     return bool(parsed.netloc or scheme in {'udp', 'rtp'})
 
