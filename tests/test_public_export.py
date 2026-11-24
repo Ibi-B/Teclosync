@@ -52,8 +52,8 @@ class PublicExportTests(unittest.TestCase):
             root = Path(directory)
             records = [
                 _record('iptv-org-sweden', 'SVT 1',
-                        'https://streams.example/svt1.m3u8', 1,
-                        'https://images.example/svt.png'),
+                        'https://streams.example.com/svt1.m3u8', 1,
+                        'https://images.example.com/svt.png'),
                 _record('iptv-org-sweden', 'Signed logo',
                         'https://streams.example/news.m3u8', 2,
                         'https://images.example/logo.png?X-Amz-Signature=signed'),
