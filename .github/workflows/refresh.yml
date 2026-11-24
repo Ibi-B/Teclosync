@@ -34,6 +34,33 @@ jobs:
           TECLOSYNC_S3_ACCESS_KEY_ID: ${{ secrets.TECLOSYNC_S3_ACCESS_KEY_ID }}
           TECLOSYNC_S3_SECRET_ACCESS_KEY: ${{ secrets.TECLOSYNC_S3_SECRET_ACCESS_KEY }}
         run: python -m teclosync refresh --publish
+      - name: Publish read-only IPTV catalogue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          publish_dir="$(mktemp -d)"
+          if git ls-remote --exit-code "$repo_url" refs/heads/teclosync-public >/dev/null 2>&1; then
+            git clone --depth 1 --branch teclosync-public "$repo_url" "$publish_dir"
+          else
+            git -C "$publish_dir" init --initial-branch=teclosync-public
+            git -C "$publish_dir" remote add origin "$repo_url"
+          fi
+          test -s state/artifacts/public/iptv/catalogue.json
+          rm -rf "$publish_dir/iptv"
+          mkdir -p "$publish_dir/iptv"
+          cp -R state/artifacts/public/iptv/. "$publish_dir/iptv/"
+          touch "$publish_dir/.nojekyll"
+          git -C "$publish_dir" config user.name "github-actions[bot]"
+          git -C "$publish_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$publish_dir" add -A iptv .nojekyll
+          if ! git -C "$publish_dir" diff --cached --quiet; then
+            git -C "$publish_dir" commit -m "Publish Teclosync IPTV catalogue"
+            git -C "$publish_dir" push origin HEAD:refs/heads/teclosync-public
+          else
+            echo "Public IPTV export is unchanged."
+          fi
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
