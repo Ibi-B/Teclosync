@@ -10,6 +10,7 @@ from teclosync.build import build_artifacts
 from teclosync.config import load_sources
 from teclosync.external_state import SnapshotStore, sha256_file
 from teclosync.refresh import refresh_sources
+from teclosync.public_export import write_public_catalogue
 from teclosync.retention import StateRotator
 from teclosync.staging import StagingDatabase
 from teclosync.validation import ValidationError, validate_refresh
@@ -137,6 +138,19 @@ def run_refresh(args):
         diagnostics['source_freshness'] = statuses
         manifest = build_artifacts(database, args.output, run_id, source_status=statuses)
         diagnostics['artifacts'] = manifest['artifacts']
+        public_catalogue = write_public_catalogue(
+            database,
+            enabled_sources,
+            statuses,
+            Path(args.output) / 'public' / 'iptv',
+            run_id,
+            generated_at=manifest['generated_at'],
+        )
+        diagnostics['public_catalogue'] = {
+            'path': str(Path(args.output) / 'public' / 'iptv' / 'catalogue.json'),
+            'playlist_count': public_catalogue['playlistCount'],
+            'channel_count': public_catalogue['channelCount'],
+        }
         if args.publish:
             manifest_key = store.publish_release(manifest, run_id, args.output)
             state_key = store.upload_state_database(args.database, run_id=run_id)
