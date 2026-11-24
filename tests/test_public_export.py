@@ -1,7 +1,7 @@
 import json
+import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 from teclosync.public_export import write_public_catalogue
 
@@ -27,51 +27,62 @@ def _record(source_id, name, url, index):
     }
 
 
-def test_public_export_writes_source_playlist_and_safe_catalogue(tmp_path):
-    database = FakeDatabase([
-        _record('iptv-org-sweden', 'SVT 1', 'https://streams.example/svt1.m3u8', 1),
-        _record('iptv-org-sweden', 'Private', 'https://user:password@private.example/live', 2),
-    ])
-    catalogue = write_public_catalogue(
-        database,
-        [{
-            'id': 'iptv-org-sweden',
-            'name': 'IPTV-Org Sweden',
-            'category': 'live_tv',
-            'region': 'se',
-        }],
-        [{
-            'source_id': 'iptv-org-sweden',
-            'status': 'failed',
-            'data_state': 'retained_last_good',
-        }],
-        tmp_path / 'public' / 'iptv',
-        '20261125T120000Z',
-        generated_at='2026-11-25T12:00:00+00:00',
-    )
+class PublicExportTests(unittest.TestCase):
+    def test_writes_source_playlist_and_safe_catalogue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = FakeDatabase([
+                _record('iptv-org-sweden', 'SVT 1', 'https://streams.example/svt1.m3u8', 1),
+                _record('iptv-org-sweden', 'Private', 'https://user:password@private.example/live', 2),
+                _record('iptv-org-sweden', 'Tokenized', 'https://streams.example/live?access_token=secret', 3),
+            ])
+            catalogue = write_public_catalogue(
+                database,
+                [{
+                    'id': 'iptv-org-sweden',
+                    'name': 'IPTV-Org Sweden',
+                    'category': 'live_tv',
+                    'region': 'se',
+                }],
+                [{
+                    'source_id': 'iptv-org-sweden',
+                    'status': 'failed',
+                    'data_state': 'retained_last_good',
+                }],
+                root / 'public' / 'iptv',
+                '20261125T120000Z',
+                generated_at='2026-11-25T12:00:00+00:00',
+            )
 
-    assert catalogue['schemaVersion'] == 1
-    assert catalogue['releaseId'] == '20261125T120000Z'
-    assert catalogue['playlistCount'] == 1
-    assert catalogue['channelCount'] == 1
-    playlist = catalogue['playlists'][0]
-    assert playlist['dataState'] == 'retained_last_good'
-    assert playlist['path'] == 'playlists/iptv-org-sweden.m3u8'
+            self.assertEqual(catalogue['schemaVersion'], 1)
+            self.assertEqual(catalogue['releaseId'], '20261125T120000Z')
+            self.assertEqual(catalogue['playlistCount'], 1)
+            self.assertEqual(catalogue['channelCount'], 1)
+            playlist = catalogue['playlists'][0]
+            self.assertEqual(playlist['dataState'], 'retained_last_good')
+            self.assertEqual(playlist['path'], 'playlists/iptv-org-sweden.m3u8')
 
-    index = json.loads((tmp_path / 'public' / 'iptv' / 'catalogue.json').read_text())
-    assert index == catalogue
-    m3u = (tmp_path / 'public' / 'iptv' / playlist['path']).read_text()
-    assert 'SVT 1' in m3u
-    assert 'private.example' not in m3u
+            index = json.loads((root / 'public' / 'iptv' / 'catalogue.json').read_text())
+            self.assertEqual(index, catalogue)
+            m3u = (root / 'public' / 'iptv' / playlist['path']).read_text()
+            self.assertIn('SVT 1', m3u)
+            self.assertNotIn('private.example', m3u)
+            self.assertNotIn('access_token', m3u)
+            self.assertNotIn('secret', m3u)
+
+    def test_refuses_to_replace_index_with_empty_catalogue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with self.assertRaisesRegex(ValueError, 'no_public_playlists_to_publish'):
+                write_public_catalogue(
+                    FakeDatabase([]),
+                    [{'id': 'iptv-org-sweden', 'name': 'IPTV-Org Sweden'}],
+                    [],
+                    output,
+                    '20261125T120000Z',
+                )
+            self.assertFalse((output / 'catalogue.json').exists())
 
 
-def test_public_export_refuses_to_replace_index_with_empty_catalogue(tmp_path):
-    with pytest.raises(ValueError, match='no_public_playlists_to_publish'):
-        write_public_catalogue(
-            FakeDatabase([]),
-            [{'id': 'iptv-org-sweden', 'name': 'IPTV-Org Sweden'}],
-            [],
-            tmp_path,
-            '20261125T120000Z',
-        )
-    assert not (tmp_path / 'catalogue.json').exists()
+if __name__ == '__main__':
+    unittest.main()
