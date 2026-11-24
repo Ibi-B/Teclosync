@@ -55,10 +55,10 @@ class PublicExportTests(unittest.TestCase):
                         'https://streams.example.com/svt1.m3u8', 1,
                         'https://images.example.com/svt.png'),
                 _record('iptv-org-sweden', 'Signed logo',
-                        'https://streams.example/news.m3u8', 2,
-                        'https://images.example/logo.png?X-Amz-Signature=signed'),
+                        'https://streams.example.com/news.m3u8', 2,
+                        'https://images.example.com/logo.png?X-Amz-Signature=signed'),
                 _record('iptv-org-sweden', 'Path credentials',
-                        'https://streams.example/live/user123/pass456/77.ts', 3),
+                        'https://streams.example.com/live/user123/pass456/77.ts', 3),
                 _record('iptv-org-sweden', 'Loopback',
                         'http://127.0.0.1/live.m3u8', 4),
                 _record('iptv-org-sweden', 'Private network',
@@ -66,7 +66,7 @@ class PublicExportTests(unittest.TestCase):
                 _record('iptv-org-sweden', 'Local host',
                         'http://router.local/stream.m3u8', 6),
                 _record('iptv-org-sweden', 'Signed stream',
-                        'https://streams.example/live?access_token=secret', 7),
+                        'https://streams.example.com/live?access_token=secret', 7),
             ]
             catalogue = self._write(root, records)
             playlist = catalogue['playlists'][0]
@@ -83,7 +83,7 @@ class PublicExportTests(unittest.TestCase):
             self.assertIn('SVT 1', m3u)
             self.assertIn('Signed logo', m3u)
             self.assertIn('Path credential logo', m3u)
-            self.assertIn('https://streams.example/news.m3u8', m3u)
+            self.assertIn('https://streams.example.com/news.m3u8', m3u)
             self.assertNotIn('X-Amz-Signature', m3u)
             self.assertNotIn('/live/user/pass/', m3u)
             self.assertNotIn('images.example/logo.png?', m3u)
@@ -101,9 +101,9 @@ class PublicExportTests(unittest.TestCase):
                 root,
                 [
                     _record('iptv-org-sweden', 'One',
-                            'https://streams.example/one.m3u8', 1),
+                            'https://streams.example.com/one.m3u8', 1),
                     _record('iptv-org-sweden', 'Two',
-                            'https://streams.example/two.m3u8', 2),
+                            'https://streams.example.com/two.m3u8', 2),
                 ],
             )
             self.assertEqual(catalogue['channelCount'], 2)
@@ -143,7 +143,7 @@ class PublicExportTests(unittest.TestCase):
                 self._write(
                     Path(directory),
                     [_record('iptv-org-sweden', 'One',
-                             'https://streams.example/one.m3u8', 1)],
+                             'https://streams.example.com/one.m3u8', 1)],
                     run_id='../current',
                 )
 
