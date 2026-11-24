@@ -56,7 +56,7 @@ def _has_private_or_local_host(host):
 
 
 def _has_credential_path(parsed):
-    path = unquote(parsed.path).replace('\\\\', '/')
+    path = unquote(parsed.path).replace(chr(92), '/')
     segments = [segment for segment in path.split('/') if segment]
     if any(
         re.search(r'(?:token|password|passwd|secret|api[_-]?key)=', segment, re.I)
