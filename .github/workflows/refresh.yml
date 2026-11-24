@@ -51,9 +51,28 @@ jobs:
             echo "::warning::No validated public IPTV export was generated; preserving the previous public branch unchanged."
             exit 0
           fi
-          rm -rf "$publish_dir/iptv"
-          mkdir -p "$publish_dir/iptv"
-          cp -R state/artifacts/public/iptv/. "$publish_dir/iptv/"
+          release_id="$(python -c 'import json; print(json.load(open("state/artifacts/public/iptv/catalogue.json", encoding="utf-8"))["releaseId"])')"
+          if ! [[ "$release_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "::error::Invalid Teclosync public release ID: $release_id"
+            exit 1
+          fi
+
+          mkdir -p "$publish_dir/iptv/releases"
+          release_source="state/artifacts/public/iptv/releases/$release_id"
+          release_target="$publish_dir/iptv/releases/$release_id"
+          test -d "$release_source"
+          if [ -e "$release_target" ]; then
+            if ! diff -qr "$release_source" "$release_target"; then
+              echo "::error::Refusing to mutate an existing immutable public release: $release_id"
+              exit 1
+            fi
+          else
+            cp -R "$release_source" "$release_target"
+          fi
+
+          # Promote only the small mutable index after immutable assets are in place.
+          cp state/artifacts/public/iptv/catalogue.json "$publish_dir/iptv/catalogue.json.tmp"
+          mv "$publish_dir/iptv/catalogue.json.tmp" "$publish_dir/iptv/catalogue.json"
           touch "$publish_dir/.nojekyll"
           git -C "$publish_dir" config user.name "github-actions[bot]"
           git -C "$publish_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
