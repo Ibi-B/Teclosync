@@ -2,6 +2,14 @@ name: Verify Teclosync R2 snapshot lifecycle
 
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch containing the R2 verification implementation
+        required: true
+        type: choice
+        default: feature/teelosync-foundation
+        options:
+          - feature/teelosync-foundation
 
 permissions:
   contents: read
@@ -11,17 +19,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out the implementation under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Compile verification code
         run: python -m compileall -q teclosync scripts
+
       - name: Verify isolated R2 upload, restore, rotation, archive, and rollback
         env:
+          PYTHONPATH: .
           TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
           TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
           TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
@@ -29,6 +46,7 @@ jobs:
           TECLOSYNC_S3_ACCESS_KEY_ID: ${{ secrets.TECLOSYNC_S3_ACCESS_KEY_ID }}
           TECLOSYNC_S3_SECRET_ACCESS_KEY: ${{ secrets.TECLOSYNC_S3_SECRET_ACCESS_KEY }}
         run: python scripts/verify_r2_roundtrip.py
+
       - name: Upload R2 verification report
         if: always()
         uses: actions/upload-artifact@v4

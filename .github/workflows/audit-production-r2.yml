@@ -1,0 +1,110 @@
+name: Audit Teclosync production R2 layout and catalogue
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch containing the read-only production audit
+        required: true
+        type: choice
+        default: feature/teelosync-foundation
+        options:
+          - feature/teelosync-foundation
+      apply_archive_expiry:
+        description: Apply the 30-day expiry rule to the configured archive/ prefix only after audit safety gates pass
+        required: true
+        type: boolean
+        default: false
+      cleanup_legacy_objects:
+        description: Remove only root compatibility pointers and staging copies after their retained releases are verified byte-for-byte
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teclosync-r2-production
+  cancel-in-progress: false
+
+jobs:
+  audit-production-r2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out audit implementation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile Teclosync and audit code
+        run: python -m compileall -q teclosync scripts
+
+      - name: Verify production R2 layout and catalogue (read-only)
+        env:
+          PYTHONPATH: .
+          TECLOSYNC_DIAGNOSTICS_PREFIX: ${{ vars.TECLOSYNC_DIAGNOSTICS_PREFIX }}
+          TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
+          TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
+          TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
+          TECLOSYNC_S3_ACCESS_KEY_ID: ${{ secrets.TECLOSYNC_S3_ACCESS_KEY_ID }}
+          TECLOSYNC_S3_SECRET_ACCESS_KEY: ${{ secrets.TECLOSYNC_S3_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python scripts/inspect_production_r2.py
+
+      - name: Safely remove legacy pointers and verified staging copies
+        if: ${{ inputs.cleanup_legacy_objects }}
+        env:
+          TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
+          TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
+          TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
+          TECLOSYNC_S3_ACCESS_KEY_ID: ${{ secrets.TECLOSYNC_S3_ACCESS_KEY_ID }}
+          TECLOSYNC_S3_SECRET_ACCESS_KEY: ${{ secrets.TECLOSYNC_S3_SECRET_ACCESS_KEY }}
+        run: python scripts/cleanup_production_r2.py --apply
+
+      - name: Re-audit production R2 after cleanup
+        if: ${{ always() && inputs.cleanup_legacy_objects }}
+        env:
+          PYTHONPATH: .
+          TECLOSYNC_DIAGNOSTICS_PREFIX: ${{ vars.TECLOSYNC_DIAGNOSTICS_PREFIX }}
+          TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
+          TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
+          TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
+          TECLOSYNC_S3_ACCESS_KEY_ID: ${{ secrets.TECLOSYNC_S3_ACCESS_KEY_ID }}
+          TECLOSYNC_S3_SECRET_ACCESS_KEY: ${{ secrets.TECLOSYNC_S3_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python scripts/inspect_production_r2.py
+
+      - name: Apply or dry-run archive-only lifecycle rule
+        if: ${{ inputs.apply_archive_expiry }}
+        env:
+          TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
+          TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python scripts/manage_archive_lifecycle.py --apply
+
+      - name: Upload production audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: teclosync-production-r2-audit
+          path: state/diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
