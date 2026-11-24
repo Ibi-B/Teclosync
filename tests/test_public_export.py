@@ -111,6 +111,32 @@ class PublicExportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'no_public_playlists_to_publish'):
                 self._write(root / 'empty', [])
 
+    def test_new_publication_keeps_previous_release_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = self._write(
+                root,
+                [_record('iptv-org-sweden', 'Old SVT',
+                         'https://streams.example.com/old.m3u8', 1)],
+                run_id='20261125T120000Z',
+            )
+            old_path = root / 'public' / 'iptv' / first['playlists'][0]['path']
+            old_bytes = old_path.read_bytes()
+
+            second = self._write(
+                root,
+                [_record('iptv-org-sweden', 'New SVT',
+                         'https://streams.example.com/new.m3u8', 1)],
+                run_id='20261125T130000Z',
+            )
+            new_path = root / 'public' / 'iptv' / second['playlists'][0]['path']
+
+            self.assertNotEqual(first['playlists'][0]['path'],
+                                second['playlists'][0]['path'])
+            self.assertEqual(old_path.read_bytes(), old_bytes)
+            self.assertIn(b'Old SVT', old_bytes)
+            self.assertIn(b'New SVT', new_path.read_bytes())
+
     def test_rejects_unsafe_release_id(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, 'invalid_public_release_id'):
