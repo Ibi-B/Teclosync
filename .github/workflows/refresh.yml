@@ -47,7 +47,10 @@ jobs:
             git -C "$publish_dir" init --initial-branch=teclosync-public
             git -C "$publish_dir" remote add origin "$repo_url"
           fi
-          test -s state/artifacts/public/iptv/catalogue.json
+          if [ ! -s state/artifacts/public/iptv/catalogue.json ]; then
+            echo "::warning::No validated public IPTV export was generated; preserving the previous public branch unchanged."
+            exit 0
+          fi
           rm -rf "$publish_dir/iptv"
           mkdir -p "$publish_dir/iptv"
           cp -R state/artifacts/public/iptv/. "$publish_dir/iptv/"
