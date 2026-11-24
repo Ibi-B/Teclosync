@@ -72,7 +72,7 @@ class PublicExportTests(unittest.TestCase):
             playlist = catalogue['playlists'][0]
 
             self.assertEqual(catalogue['playlistCount'], 1)
-            self.assertEqual(catalogue['channelCount'], 2)
+            self.assertEqual(catalogue['channelCount'], 3)
             self.assertEqual(
                 playlist['path'],
                 'releases/20261125T120000Z/playlists/iptv-org-sweden.m3u8',
@@ -82,8 +82,10 @@ class PublicExportTests(unittest.TestCase):
             ).read_text(encoding='utf-8')
             self.assertIn('SVT 1', m3u)
             self.assertIn('Signed logo', m3u)
+            self.assertIn('Path credential logo', m3u)
             self.assertIn('https://streams.example/news.m3u8', m3u)
             self.assertNotIn('X-Amz-Signature', m3u)
+            self.assertNotIn('/live/user/pass/', m3u)
             self.assertNotIn('images.example/logo.png?', m3u)
             self.assertNotIn('user123', m3u)
             self.assertNotIn('127.0.0.1', m3u)
