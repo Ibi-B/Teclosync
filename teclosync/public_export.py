@@ -198,7 +198,7 @@ def write_public_catalogue(database, sources, source_status, output_dir, run_id,
     }
     output.mkdir(parents=True, exist_ok=True)
     (output / 'catalogue.json').write_text(
-        json.dumps(catalogue, indent=2, ensure_ascii=False) + '\\n',
+        json.dumps(catalogue, indent=2, ensure_ascii=False) + '\n',
         encoding='utf-8',
     )
     return catalogue
