@@ -70,7 +70,7 @@ def validate_audit(report):
     if not isinstance(prefix, str) or not prefix.strip("/") or prefix.strip("/") != os.environ.get("TECLOSYNC_S3_PREFIX", "").strip("/"):
         raise RuntimeError("production_prefix_mismatch")
     require_clean_release(report.get("current"), "current")
-    require_clean_release(report.get("previous"), "previous", strict_catalogue=False)
+    require_clean_release(report.get("previous"), "previous")
     layout = report.get("layout") or {}
     if layout.get("current_prefix_present") is not True or layout.get("previous_prefix_present") is not True:
         raise RuntimeError("protected_release_prefix_layout_incomplete")
