@@ -138,19 +138,26 @@ def run_refresh(args):
         diagnostics['source_freshness'] = statuses
         manifest = build_artifacts(database, args.output, run_id, source_status=statuses)
         diagnostics['artifacts'] = manifest['artifacts']
-        public_catalogue = write_public_catalogue(
-            database,
-            enabled_sources,
-            statuses,
-            Path(args.output) / 'public' / 'iptv',
-            run_id,
-            generated_at=manifest['generated_at'],
-        )
-        diagnostics['public_catalogue'] = {
-            'path': str(Path(args.output) / 'public' / 'iptv' / 'catalogue.json'),
-            'playlist_count': public_catalogue['playlistCount'],
-            'channel_count': public_catalogue['channelCount'],
-        }
+        try:
+            public_catalogue = write_public_catalogue(
+                database,
+                enabled_sources,
+                statuses,
+                Path(args.output) / 'public' / 'iptv',
+                run_id,
+                generated_at=manifest['generated_at'],
+            )
+            diagnostics['public_catalogue'] = {
+                'path': str(Path(args.output) / 'public' / 'iptv' / 'catalogue.json'),
+                'playlist_count': public_catalogue['playlistCount'],
+                'channel_count': public_catalogue['channelCount'],
+            }
+        except Exception as error:
+            # The read-only mobile mirror is an additive consumer export. Its
+            # failure must never block the canonical R2 snapshot rotation.
+            diagnostics['public_catalogue_error'] = (
+                f'{type(error).__name__}: {error}'
+            )
         if args.publish:
             manifest_key = store.publish_release(manifest, run_id, args.output)
             state_key = store.upload_state_database(args.database, run_id=run_id)
