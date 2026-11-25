@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely add a 90-day archive-only Cloudflare R2 lifecycle rule."""
+"""Safely add a 30-day archive-only Cloudflare R2 lifecycle rule."""
 import argparse
 import json
 import os
@@ -9,8 +9,9 @@ from urllib.request import Request, urlopen
 
 AUDIT_REPORT = Path("state/diagnostics/production-r2-audit.json")
 RESULT_REPORT = Path("state/diagnostics/archive-lifecycle-result.json")
-RULE_ID = "teclosync-archive-90-days"
-AGE_SECONDS = 90 * 24 * 60 * 60
+RULE_ID = "teclosync-archive-30-days"
+ARCHIVE_RETENTION_DAYS = 30
+AGE_SECONDS = ARCHIVE_RETENTION_DAYS * 24 * 60 * 60
 
 
 def api_call(method, url, token, payload=None):
@@ -32,7 +33,7 @@ def api_call(method, url, token, payload=None):
     return result.get("result") or {}
 
 
-def require_clean_release(release, slot):
+def require_clean_release(release, slot, strict_catalogue=True):
     if not isinstance(release, dict):
         raise RuntimeError(f"{slot}_release_not_present")
     state = release.get("database_and_catalogue") or {}
@@ -46,12 +47,18 @@ def require_clean_release(release, slot):
         raise RuntimeError(f"{slot}_sqlite_schema_incomplete")
     if state.get("database_channel_count", 0) <= 0:
         raise RuntimeError(f"{slot}_database_has_no_channels")
-    if quality.get("blank_names") or quality.get("blank_stream_urls") or quality.get("malformed_stream_urls"):
-        raise RuntimeError(f"{slot}_catalogue_has_invalid_channel_fields")
     if catalogue.get("record_count") != state.get("database_channel_count") or not catalogue.get("matches_database_count"):
         raise RuntimeError(f"{slot}_catalogue_record_count_mismatch")
-    if catalogue.get("blank_names") or catalogue.get("blank_stream_urls") or catalogue.get("malformed_stream_urls") or catalogue.get("missing_provenance"):
+    if catalogue.get("matches_database_keys") is not True:
+        raise RuntimeError(f"{slot}_catalogue_database_key_mismatch")
+    if strict_catalogue and (
+        quality.get("blank_names") or quality.get("blank_stream_urls") or quality.get("malformed_stream_urls")
+        or catalogue.get("blank_names") or catalogue.get("blank_stream_urls")
+        or catalogue.get("malformed_stream_urls") or catalogue.get("missing_provenance")
+    ):
         raise RuntimeError(f"{slot}_catalogue_quality_gate_failed")
+    if release.get("state_sha256_verified") is not True:
+        raise RuntimeError(f"{slot}_state_sha256_not_verified")
     if release.get("source_count_mismatches"):
         raise RuntimeError(f"{slot}_manifest_source_counts_mismatch")
 
@@ -64,6 +71,9 @@ def validate_audit(report):
         raise RuntimeError("production_prefix_mismatch")
     require_clean_release(report.get("current"), "current")
     require_clean_release(report.get("previous"), "previous")
+    layout = report.get("layout") or {}
+    if layout.get("current_prefix_present") is not True or layout.get("previous_prefix_present") is not True:
+        raise RuntimeError("protected_release_prefix_layout_incomplete")
     archive = report.get("archive") or {}
     if archive.get("all_pointer_references_scoped_to_archive") is not True:
         raise RuntimeError("archive_pointer_layout_invalid")
@@ -77,10 +87,10 @@ def validate_audit(report):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apply", action="store_true", help="Apply the archive-only 90-day rule after all safety gates pass")
+    parser.add_argument("--apply", action="store_true", help="Apply the archive-only 30-day rule after all safety gates pass")
     args = parser.parse_args()
     RESULT_REPORT.parent.mkdir(parents=True, exist_ok=True)
-    result = {"applied": False, "rule_id": RULE_ID, "days": 90}
+    result = {"applied": False, "rule_id": RULE_ID, "days": ARCHIVE_RETENTION_DAYS}
     try:
         audit = json.loads(AUDIT_REPORT.read_text(encoding="utf-8"))
         base, lifecycle_snapshot = validate_audit(audit)
@@ -108,9 +118,23 @@ def main():
                 ):
                     raise RuntimeError("lifecycle_policy_changed_or_protected_prefix_now_at_risk")
         target_prefix = f"{base}/archive/"
+        rule_ids = [rule.get("id") for rule in current_rules]
+        if len(rule_ids) != len(set(rule_ids)):
+            raise RuntimeError("existing_lifecycle_rule_ids_are_not_unique")
         existing_target = [rule for rule in current_rules if rule.get("id") == RULE_ID]
         if any((rule.get("conditions") or {}).get("prefix") != target_prefix for rule in existing_target):
             raise RuntimeError("lifecycle_rule_id_already_used_for_different_prefix")
+        for rule in current_rules:
+            if rule.get("id") == RULE_ID or rule.get("enabled") is not True or not rule.get("deleteObjectsTransition"):
+                continue
+            old_prefix = (rule.get("conditions") or {}).get("prefix", "")
+            overlaps_archive = (
+                not old_prefix
+                or target_prefix.startswith(old_prefix)
+                or old_prefix.startswith(target_prefix)
+            )
+            if overlaps_archive:
+                raise RuntimeError("existing_delete_rule_overlaps_archive_prefix_manual_review_required")
         preserved_rules = [rule for rule in current_rules if rule.get("id") != RULE_ID]
         target_rule = {
             "id": RULE_ID,
@@ -149,6 +173,13 @@ def main():
             expected_ids = {rule.get("id") for rule in next_rules}
             if observed_ids != expected_ids:
                 raise RuntimeError("lifecycle_rule_collection_changed_unexpectedly")
+            expected_preserved = {rule.get("id"): rule for rule in preserved_rules}
+            observed_preserved = {
+                rule.get("id"): rule for rule in after_rules
+                if rule.get("id") != RULE_ID
+            }
+            if observed_preserved != expected_preserved:
+                raise RuntimeError("existing_lifecycle_rules_not_preserved_exactly")
             result["applied"] = True
             result["verified"] = True
             result["final_rule_count"] = len(after_rules)

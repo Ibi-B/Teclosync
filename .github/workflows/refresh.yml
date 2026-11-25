@@ -1,40 +1,95 @@
-name: Refresh video catalog
+name: Refresh Telclosync catalogue
 
 on:
   workflow_dispatch:
   schedule:
+    # Preserve the existing main-branch daily refresh cadence (03:00 UTC).
     - cron: "0 3 * * *"
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: teclosync-r2-production
   cancel-in-progress: false
 
 jobs:
-  build:
+  refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: python scripts/build_video_catalog.py
-      - run: python scripts/validate_catalog.py
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: output
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Validate configuration
+        run: python -m teclosync validate-config
+      - name: Run controlled refresh
+        env:
+          TECLOSYNC_S3_BUCKET: ${{ vars.TECLOSYNC_S3_BUCKET }}
+          TECLOSYNC_S3_ENDPOINT: ${{ vars.TECLOSYNC_S3_ENDPOINT }}
+          TECLOSYNC_S3_REGION: ${{ vars.TECLOSYNC_S3_REGION }}
+          TECLOSYNC_S3_PREFIX: ${{ vars.TECLOSYNC_S3_PREFIX }}
+          TECLOSYNC_DIAGNOSTICS_PREFIX: ${{ vars.TECLOSYNC_DIAGNOSTICS_PREFIX }}
+          TECLOSYNC_S3_ACCESS_KEY_ID: ${{ secrets.TECLOSYNC_S3_ACCESS_KEY_ID }}
+          TECLOSYNC_S3_SECRET_ACCESS_KEY: ${{ secrets.TECLOSYNC_S3_SECRET_ACCESS_KEY }}
+        run: python -m teclosync refresh --publish
+      - name: Publish read-only IPTV catalogue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          publish_dir="$(mktemp -d)"
+          if git ls-remote --exit-code "$repo_url" refs/heads/teclosync-public >/dev/null 2>&1; then
+            git clone --depth 1 --branch teclosync-public "$repo_url" "$publish_dir"
+          else
+            git -C "$publish_dir" init --initial-branch=teclosync-public
+            git -C "$publish_dir" remote add origin "$repo_url"
+          fi
+          if [ ! -s state/artifacts/public/iptv/catalogue.json ]; then
+            echo "::warning::No validated public IPTV export was generated; preserving the previous public branch unchanged."
+            exit 0
+          fi
+          release_id="$(python -c 'import json; print(json.load(open("state/artifacts/public/iptv/catalogue.json", encoding="utf-8"))["releaseId"])')"
+          if ! [[ "$release_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "::error::Invalid Teclosync public release ID: $release_id"
+            exit 1
+          fi
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          mkdir -p "$publish_dir/iptv/releases"
+          release_source="state/artifacts/public/iptv/releases/$release_id"
+          release_target="$publish_dir/iptv/releases/$release_id"
+          test -d "$release_source"
+          if [ -e "$release_target" ]; then
+            if ! diff -qr "$release_source" "$release_target"; then
+              echo "::error::Refusing to mutate an existing immutable public release: $release_id"
+              exit 1
+            fi
+          else
+            cp -R "$release_source" "$release_target"
+          fi
+
+          # Promote only the small mutable index after immutable assets are in place.
+          cp state/artifacts/public/iptv/catalogue.json "$publish_dir/iptv/catalogue.json.tmp"
+          mv "$publish_dir/iptv/catalogue.json.tmp" "$publish_dir/iptv/catalogue.json"
+          touch "$publish_dir/.nojekyll"
+          git -C "$publish_dir" config user.name "github-actions[bot]"
+          git -C "$publish_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$publish_dir" add -A iptv .nojekyll
+          if ! git -C "$publish_dir" diff --cached --quiet; then
+            git -C "$publish_dir" commit -m "Publish Teclosync IPTV catalogue"
+            git -C "$publish_dir" push origin HEAD:refs/heads/teclosync-public
+          else
+            echo "Public IPTV export is unchanged."
+          fi
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telclosync-refresh-diagnostics
+          path: state/diagnostics
+          retention-days: 14

@@ -6,8 +6,10 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from collections import Counter
 from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -41,7 +43,10 @@ def client_from_env():
         region_name=os.environ.get("TECLOSYNC_S3_REGION", "auto"),
         aws_access_key_id=os.environ["TECLOSYNC_S3_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["TECLOSYNC_S3_SECRET_ACCESS_KEY"],
-        config=Config(retries={"max_attempts": 3}, s3={"addressing_style": "path"}),
+        config=Config(
+            retries={"mode": "adaptive", "max_attempts": 8},
+            s3={"addressing_style": "path"},
+        ),
     )
 
 
@@ -77,24 +82,29 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
         result["integrity_check"] = [r[0] for r in conn.execute("PRAGMA integrity_check")]
         result["foreign_key_violations"] = [list(r) for r in conn.execute("PRAGMA foreign_key_check")]
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        required_tables = {"sources", "source_runs", "channels", "channel_duplicates", "programmes"}
+        required_tables = {"sources", "source_runs", "channels", "programmes"}
         result["missing_tables"] = sorted(required_tables - tables)
+        result["duplicate_audit_available"] = "channel_duplicates" in tables
         if not required_tables.issubset(tables):
             conn.close()
             return result
         total = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
         result["database_channel_count"] = total
         result["programme_count"] = conn.execute("SELECT COUNT(*) FROM programmes").fetchone()[0]
-        result["duplicate_audit_rows_total"] = conn.execute("SELECT COUNT(*) FROM channel_duplicates").fetchone()[0]
-        result["duplicate_rows_for_release_run"] = conn.execute(
-            "SELECT COUNT(*) FROM channel_duplicates WHERE source_run_id = ?", (expected_run_id,)
-        ).fetchone()[0]
+        if "channel_duplicates" in tables:
+            result["duplicate_audit_rows_total"] = conn.execute("SELECT COUNT(*) FROM channel_duplicates").fetchone()[0]
+            result["duplicate_rows_for_release_run"] = conn.execute(
+                "SELECT COUNT(*) FROM channel_duplicates WHERE source_run_id = ?", (expected_run_id,)
+            ).fetchone()[0]
+        else:
+            result["duplicate_audit_rows_total"] = None
+            result["duplicate_rows_for_release_run"] = None
         result["source_count"] = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
         result["source_counts"] = [
             dict(r) for r in conn.execute(
                 """SELECT s.source_id, s.name, s.category, s.format,
                           COUNT(c.channel_key) AS channel_count,
-                          SUM(CASE WHEN c.name IS NULL OR trim(c.name) = '' THEN 1 ELSE 0 END) AS blank_names,
+                          SUM(CASE WHEN c.channel_key IS NOT NULL AND (c.name IS NULL OR trim(c.name) = '') THEN 1 ELSE 0 END) AS blank_names,
                           SUM(CASE WHEN c.tvg_logo IS NOT NULL AND trim(c.tvg_logo) <> '' THEN 1 ELSE 0 END) AS with_logo,
                           SUM(CASE WHEN c.country IS NOT NULL AND trim(c.country) <> '' THEN 1 ELSE 0 END) AS with_country,
                           SUM(CASE WHEN c.language IS NOT NULL AND trim(c.language) <> '' THEN 1 ELSE 0 END) AS with_language,
@@ -114,8 +124,11 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
         url_examples = []
         for row in conn.execute("SELECT source_id, name, stream_url FROM channels"):
             raw = row["stream_url"] or ""
-            parsed = urlsplit(raw)
-            valid = parsed.scheme.lower() in NETWORK_SCHEMES and bool(parsed.netloc or parsed.scheme in {"udp", "rtp"})
+            try:
+                parsed = urlsplit(raw)
+                valid = parsed.scheme.lower() in NETWORK_SCHEMES and bool(parsed.netloc or parsed.scheme in {"udp", "rtp"})
+            except ValueError:
+                valid = False
             if not valid:
                 bad_urls.append(row["source_id"])
                 if len(url_examples) < 20:
@@ -130,6 +143,18 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
             "urls_shared_by_multiple_sources": conn.execute(
                 "SELECT COUNT(*) FROM (SELECT stream_url FROM channels GROUP BY stream_url HAVING COUNT(DISTINCT source_id) > 1)"
             ).fetchone()[0],
+            "cross_source_url_overlap_examples": [
+                dict(r) for r in conn.execute(
+                    """SELECT stream_url, COUNT(*) AS record_count,
+                              COUNT(DISTINCT source_id) AS source_count,
+                              GROUP_CONCAT(DISTINCT source_id) AS source_ids
+                       FROM channels
+                       GROUP BY stream_url
+                       HAVING COUNT(DISTINCT source_id) > 1
+                       ORDER BY source_count DESC, record_count DESC
+                       LIMIT 20"""
+                )
+            ],
             "source_run_rows": conn.execute("SELECT COUNT(*) FROM source_runs").fetchone()[0],
             "latest_runs": [
                 dict(r) for r in conn.execute(
@@ -141,7 +166,11 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
                 )
             ],
         }
-        result["catalogue"] = audit_catalogue(catalogue_bytes, total)
+        database_keys = {
+            (row["source_id"], row["channel_key"])
+            for row in conn.execute("SELECT source_id, channel_key FROM channels")
+        }
+        result["catalogue"] = audit_catalogue(catalogue_bytes, total, database_keys)
         conn.close()
     finally:
         try:
@@ -151,7 +180,7 @@ def source_and_catalogue_audit(db_bytes, catalogue_bytes, expected_run_id):
     return result
 
 
-def audit_catalogue(payload, expected_db_count):
+def audit_catalogue(payload, expected_db_count, database_keys):
     stream = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload))
     records = 0
     blank_names = 0
@@ -160,6 +189,9 @@ def audit_catalogue(payload, expected_db_count):
     missing_provenance = 0
     source_counts = Counter()
     malformed_examples = []
+    catalogue_keys = set()
+    duplicate_catalogue_keys = 0
+    missing_catalogue_keys = 0
     for line_no, raw in enumerate(io.BufferedReader(stream), 1):
         if not raw.strip():
             continue
@@ -170,14 +202,26 @@ def audit_catalogue(payload, expected_db_count):
             raise RuntimeError(f"catalogue_jsonl_invalid_at_line_{line_no}:{type(error).__name__}") from error
         source_id = record.get("source_id") or "(missing)"
         source_counts[source_id] += 1
+        channel_key = record.get("channel_key")
+        if not channel_key:
+            missing_catalogue_keys += 1
+        else:
+            key = (source_id, channel_key)
+            if key in catalogue_keys:
+                duplicate_catalogue_keys += 1
+            catalogue_keys.add(key)
         if not str(record.get("name") or "").strip():
             blank_names += 1
         url = str(record.get("stream_url") or "").strip()
         if not url:
             blank_urls += 1
         else:
-            parsed = urlsplit(url)
-            if parsed.scheme.lower() not in NETWORK_SCHEMES or not (parsed.netloc or parsed.scheme in {"udp", "rtp"}):
+            try:
+                parsed = urlsplit(url)
+                valid = parsed.scheme.lower() in NETWORK_SCHEMES and bool(parsed.netloc or parsed.scheme in {"udp", "rtp"})
+            except ValueError:
+                valid = False
+            if not valid:
                 malformed_urls += 1
                 if len(malformed_examples) < 20:
                     malformed_examples.append({"line": line_no, "source_id": source_id, "name": record.get("name"), "url": url[:180]})
@@ -187,6 +231,11 @@ def audit_catalogue(payload, expected_db_count):
     return {
         "record_count": records,
         "matches_database_count": records == expected_db_count,
+        "missing_database_records": len(database_keys - catalogue_keys),
+        "catalogue_only_records": len(catalogue_keys - database_keys),
+        "missing_channel_keys": missing_catalogue_keys,
+        "duplicate_catalogue_keys": duplicate_catalogue_keys,
+        "matches_database_keys": database_keys == catalogue_keys and not missing_catalogue_keys and not duplicate_catalogue_keys,
         "blank_names": blank_names,
         "blank_stream_urls": blank_urls,
         "malformed_stream_urls": malformed_urls,
@@ -207,6 +256,9 @@ def verify_release(s3, bucket, base, slot, pointer):
     expected_slot_prefix = f"{base.rstrip('/')}/{slot}/"
     if not manifest_key.startswith(expected_slot_prefix) or not state_key.startswith(expected_slot_prefix):
         raise RuntimeError(f"{slot}_pointer_references_wrong_slot")
+    release_prefix = manifest_key.rsplit("/", 1)[0]
+    if release_prefix.rsplit("/", 1)[-1] != str(run_id) or state_key != f"{release_prefix}/teclo-sync.db":
+        raise RuntimeError(f"{slot}_pointer_release_path_mismatch")
     manifest_bytes = s3.get_object(Bucket=bucket, Key=manifest_key)["Body"].read()
     manifest = json.loads(manifest_bytes)
     if manifest.get("run_id") != run_id or not isinstance(manifest.get("artifacts"), list):
@@ -230,11 +282,15 @@ def verify_release(s3, bucket, base, slot, pointer):
             text = body.decode("utf-8", errors="replace").splitlines()
             item["m3u_entries"] = sum(1 for line in text if line.startswith("#EXTINF:"))
             item["manifest_channel_count"] = artifact.get("channel_count")
+            if item["m3u_entries"] != item["manifest_channel_count"]:
+                raise RuntimeError(f"{slot}_m3u_entry_count_mismatch:{relative}")
         artifact_results.append(item)
     state_bytes = s3.get_object(Bucket=bucket, Key=state_key)["Body"].read()
     state_hash = sha256(state_bytes)
     expected_state_hash = pointer.get("state_sha256")
-    if expected_state_hash and state_hash != expected_state_hash:
+    if not expected_state_hash:
+        raise RuntimeError(f"{slot}_state_hash_missing")
+    if state_hash != expected_state_hash:
         raise RuntimeError(f"{slot}_state_hash_mismatch")
     if catalogue_payload is None:
         raise RuntimeError(f"{slot}_catalogue_artifact_missing")
@@ -261,6 +317,35 @@ def verify_release(s3, bucket, base, slot, pointer):
     }
 
 
+def read_cloudflare_json(url, headers, max_attempts=4):
+    """Retry transient Cloudflare API failures without turning them into permanent gates."""
+    retryable_statuses = {429, 500, 502, 503, 504}
+    last_error = None
+    for attempt in range(max_attempts):
+        request = Request(url, headers=headers)
+        try:
+            with urlopen(request, timeout=30) as response:
+                return json.loads(response.read())
+        except HTTPError as error:
+            last_error = error
+            if error.code not in retryable_statuses or attempt + 1 >= max_attempts:
+                raise
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            try:
+                delay = max(0.0, min(float(retry_after), 10.0)) if retry_after else min(2 ** attempt, 8)
+            except (TypeError, ValueError):
+                delay = min(2 ** attempt, 8)
+            time.sleep(delay)
+        except URLError as error:
+            last_error = error
+            if attempt + 1 >= max_attempts:
+                raise
+            time.sleep(min(2 ** attempt, 8))
+    if last_error:
+        raise last_error
+    raise RuntimeError("cloudflare_api_request_failed")
+
+
 def inspect_lifecycle_rules(bucket):
     token = os.environ.get("CLOUDFLARE_API_TOKEN")
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
@@ -269,11 +354,10 @@ def inspect_lifecycle_rules(bucket):
         if endpoint_host.endswith(".r2.cloudflarestorage.com"):
             account_id = endpoint_host.split(".", 1)[0]
     if not token or not account_id:
-        return {"status": "not_configured", "required": ["CLOUDFLARE_API_TOKEN secret", "CLOUDFLARE_ACCOUNT_ID repository variable"]}
+        return {"status": "not_configured", "required": ["CLOUDFLARE_API_TOKEN secret; account ID is derived from TECLOSYNC_S3_ENDPOINT when possible"]}
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/r2/buckets/{bucket}/lifecycle"
-    request = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-    with urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read())
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    payload = read_cloudflare_json(url, headers)
     if not payload.get("success"):
         raise RuntimeError("cloudflare_lifecycle_read_failed")
     rules = payload.get("result", {}).get("rules", [])
@@ -312,6 +396,10 @@ def inspect_lifecycle_rules(bucket):
         "rule_count": len(output),
         "rules": output,
         "blocking_protected_prefix_rules": blocking,
+        "existing_archive_expiry_rules": [
+            item for item in output
+            if item["delete_rule"] and item["prefix"] == f"{base}/archive/"
+        ],
         "safe_to_add_archive_only_expiry": not blocking,
     }
 
@@ -322,8 +410,23 @@ def run():
     s3 = client_from_env()
     root = base + "/"
     objects = list_all(s3, bucket, root)
-    top = Counter(obj["Key"][len(root):].split("/", 1)[0] for obj in objects)
+    top = Counter()
+    top_bytes = Counter()
+    for obj in objects:
+        relative = obj["Key"][len(root):]
+        group = relative.split("/", 1)[0]
+        top[group] += 1
+        top_bytes[group] += int(obj.get("Size", 0) or 0)
+    state_bytes = sum(int(obj.get("Size", 0) or 0) for obj in objects)
     keys = {obj["Key"] for obj in objects}
+
+    diagnostics_prefix = os.environ.get("TECLOSYNC_DIAGNOSTICS_PREFIX", "").strip("/")
+    diagnostics_objects = []
+    if diagnostics_prefix:
+        if diagnostics_prefix == base or diagnostics_prefix.startswith(root) or base.startswith(diagnostics_prefix + "/"):
+            raise RuntimeError("diagnostics_prefix_must_be_separate_from_production_prefix")
+        diagnostics_objects = list_all(s3, bucket, diagnostics_prefix + "/")
+    diagnostics_bytes = sum(int(obj.get("Size", 0) or 0) for obj in diagnostics_objects)
 
     current_key = f"{base}/current/current.json"
     previous_key = f"{base}/previous/current.json"
@@ -336,14 +439,54 @@ def run():
     if not current_pointer:
         raise RuntimeError("production_current_pointer_not_found")
 
+    lifecycle = inspect_lifecycle_rules(bucket)
+
+    legacy_current_key = f"{base}/current.json"
+    legacy_previous_key = f"{base}/previous.json"
+    legacy_current_pointer = get_json(s3, bucket, legacy_current_key) if legacy_current_key in keys else None
+    legacy_previous_pointer = get_json(s3, bucket, legacy_previous_key) if legacy_previous_key in keys else None
+    release_staging_objects = [
+        {"key": obj["Key"], "bytes": obj.get("Size"), "last_modified": obj.get("LastModified").isoformat() if obj.get("LastModified") else None}
+        for obj in objects if obj["Key"].startswith(f"{base}/releases/")
+    ]
     report = {
         "bucket": bucket,
         "production_prefix": base,
         "read_only": True,
+        "lifecycle": lifecycle,
         "listed_object_count": len(objects),
         "top_level_prefix_object_counts": dict(top),
-        "legacy_root_current_pointer_present": f"{base}/current.json" in keys,
-        "legacy_root_previous_pointer_present": f"{base}/previous.json" in keys,
+        "storage_usage": {
+            "production_prefix": {
+                "prefix": base,
+                "object_count": len(objects),
+                "total_bytes": state_bytes,
+                "decimal_gb": round(state_bytes / 1_000_000_000, 6),
+                "bytes_by_top_level": dict(top_bytes),
+            },
+            "diagnostics_prefix": (
+                {
+                    "prefix": diagnostics_prefix,
+                    "object_count": len(diagnostics_objects),
+                    "total_bytes": diagnostics_bytes,
+                    "decimal_gb": round(diagnostics_bytes / 1_000_000_000, 6),
+                }
+                if diagnostics_prefix else None
+            ),
+            "combined_teclosync_bytes": state_bytes + diagnostics_bytes if diagnostics_prefix else None,
+            "combined_teclosync_decimal_gb": (
+                round((state_bytes + diagnostics_bytes) / 1_000_000_000, 6)
+                if diagnostics_prefix else None
+            ),
+            "cloudflare_standard_storage_free_allowance_decimal_gb": 10,
+        },
+        "legacy_root_current_pointer_present": legacy_current_pointer is not None,
+        "legacy_root_previous_pointer_present": legacy_previous_pointer is not None,
+        "legacy_root_current_pointer_run_id": legacy_current_pointer.get("run_id") if isinstance(legacy_current_pointer, dict) else None,
+        "canonical_current_pointer_run_id": current_pointer.get("run_id") if isinstance(current_pointer, dict) else None,
+        "legacy_root_current_pointer_matches_canonical": legacy_current_pointer == current_pointer,
+        "legacy_root_previous_pointer_run_id": legacy_previous_pointer.get("run_id") if isinstance(legacy_previous_pointer, dict) else None,
+        "release_staging_objects": release_staging_objects,
         "current": verify_release(s3, bucket, base, "current", current_pointer),
         "previous": verify_release(s3, bucket, base, "previous", previous_pointer) if previous_pointer else None,
     }
@@ -356,8 +499,20 @@ def run():
         run_id = pointer.get("run_id") if isinstance(pointer, dict) else None
         manifest_key = pointer.get("manifest_key") if isinstance(pointer, dict) else None
         state_key = pointer.get("state_key") if isinstance(pointer, dict) else None
-        valid = bool(run_id and manifest_key and state_key and
-                     manifest_key.startswith(archive_prefix) and state_key.startswith(archive_prefix))
+        valid = bool(
+            run_id and manifest_key and state_key
+            and manifest_key.startswith(archive_prefix)
+            and state_key.startswith(archive_prefix)
+            and manifest_key in keys
+            and state_key in keys
+        )
+        if valid:
+            expected_release_prefix = f"{archive_prefix}{run_id}/"
+            valid = (
+                key == f"{expected_release_prefix}pointer.json"
+                and manifest_key == f"{expected_release_prefix}manifest.json"
+                and state_key == f"{expected_release_prefix}teclo-sync.db"
+            )
         archive_pointers.append({"key": key, "run_id": run_id, "references_valid_archive_objects": valid})
     report["archive"] = {
         "object_count": len(archive_objects),
