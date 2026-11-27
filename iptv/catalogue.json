@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "provider": "Teclosync",
-  "releaseId": "20261126T120029Z",
-  "generatedAt": "2026-11-26T12:19:23.314914+00:00",
+  "releaseId": "20261127T115135Z",
+  "generatedAt": "2026-11-27T12:10:30.759325+00:00",
   "playlistCount": 27,
-  "channelCount": 22723,
+  "channelCount": 22798,
   "categories": [
     {
       "id": "fast_tv",
@@ -51,10 +51,10 @@
       "name": "IPTV-Org Global",
       "category": "live_tv",
       "region": "",
-      "channelCount": 11159,
+      "channelCount": 11209,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/iptv-org-global.m3u8"
+      "path": "releases/20261127T115135Z/playlists/iptv-org-global.m3u8"
     },
     {
       "id": "iptv-org-sweden",
@@ -64,47 +64,47 @@
       "channelCount": 101,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/iptv-org-sweden.m3u8"
+      "path": "releases/20261127T115135Z/playlists/iptv-org-sweden.m3u8"
     },
     {
       "id": "iptv-org-movies",
       "name": "IPTV-Org Movies",
       "category": "live_tv",
       "region": "",
-      "channelCount": 739,
+      "channelCount": 756,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/iptv-org-movies.m3u8"
+      "path": "releases/20261127T115135Z/playlists/iptv-org-movies.m3u8"
     },
     {
       "id": "iptv-org-series",
       "name": "IPTV-Org Series",
       "category": "live_tv",
       "region": "",
-      "channelCount": 472,
+      "channelCount": 474,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/iptv-org-series.m3u8"
+      "path": "releases/20261127T115135Z/playlists/iptv-org-series.m3u8"
     },
     {
       "id": "iptv-org-classic",
       "name": "IPTV-Org Classic",
       "category": "live_tv",
       "region": "",
-      "channelCount": 80,
+      "channelCount": 79,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/iptv-org-classic.m3u8"
+      "path": "releases/20261127T115135Z/playlists/iptv-org-classic.m3u8"
     },
     {
       "id": "iptv-org-animation",
       "name": "IPTV-Org Animation",
       "category": "live_tv",
       "region": "",
-      "channelCount": 161,
+      "channelCount": 165,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/iptv-org-animation.m3u8"
+      "path": "releases/20261127T115135Z/playlists/iptv-org-animation.m3u8"
     },
     {
       "id": "free-tv-curated",
@@ -114,27 +114,27 @@
       "channelCount": 2056,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/free-tv-curated.m3u8"
+      "path": "releases/20261127T115135Z/playlists/free-tv-curated.m3u8"
     },
     {
       "id": "mjh-kodi-tv",
       "name": "Matt Huisman Kodi TV",
       "category": "live_tv",
       "region": "",
-      "channelCount": 287,
+      "channelCount": 289,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/mjh-kodi-tv.m3u8"
+      "path": "releases/20261127T115135Z/playlists/mjh-kodi-tv.m3u8"
     },
     {
       "id": "xumo-play",
       "name": "Xumo Play",
       "category": "fast_tv",
       "region": "",
-      "channelCount": 436,
+      "channelCount": 437,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/xumo-play.m3u8"
+      "path": "releases/20261127T115135Z/playlists/xumo-play.m3u8"
     },
     {
       "id": "plex-us",
@@ -144,7 +144,7 @@
       "channelCount": 702,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/plex-us.m3u8"
+      "path": "releases/20261127T115135Z/playlists/plex-us.m3u8"
     },
     {
       "id": "samsung-tv-plus-us",
@@ -154,7 +154,7 @@
       "channelCount": 594,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/samsung-tv-plus-us.m3u8"
+      "path": "releases/20261127T115135Z/playlists/samsung-tv-plus-us.m3u8"
     },
     {
       "id": "roku-channel",
@@ -164,7 +164,7 @@
       "channelCount": 328,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/roku-channel.m3u8"
+      "path": "releases/20261127T115135Z/playlists/roku-channel.m3u8"
     },
     {
       "id": "amazon-fire-tv",
@@ -174,7 +174,7 @@
       "channelCount": 122,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/amazon-fire-tv.m3u8"
+      "path": "releases/20261127T115135Z/playlists/amazon-fire-tv.m3u8"
     },
     {
       "id": "tcl-plus",
@@ -184,7 +184,7 @@
       "channelCount": 489,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/tcl-plus.m3u8"
+      "path": "releases/20261127T115135Z/playlists/tcl-plus.m3u8"
     },
     {
       "id": "tcl-channels",
@@ -194,7 +194,7 @@
       "channelCount": 593,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/tcl-channels.m3u8"
+      "path": "releases/20261127T115135Z/playlists/tcl-channels.m3u8"
     },
     {
       "id": "distro-tv",
@@ -204,7 +204,7 @@
       "channelCount": 336,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/distro-tv.m3u8"
+      "path": "releases/20261127T115135Z/playlists/distro-tv.m3u8"
     },
     {
       "id": "vizio-watchfree",
@@ -214,7 +214,7 @@
       "channelCount": 482,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/vizio-watchfree.m3u8"
+      "path": "releases/20261127T115135Z/playlists/vizio-watchfree.m3u8"
     },
     {
       "id": "localnow",
@@ -224,7 +224,7 @@
       "channelCount": 515,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/localnow.m3u8"
+      "path": "releases/20261127T115135Z/playlists/localnow.m3u8"
     },
     {
       "id": "vidaa-free-tv",
@@ -234,7 +234,7 @@
       "channelCount": 769,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/vidaa-free-tv.m3u8"
+      "path": "releases/20261127T115135Z/playlists/vidaa-free-tv.m3u8"
     },
     {
       "id": "rakuten-tv-se",
@@ -244,7 +244,7 @@
       "channelCount": 168,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/rakuten-tv-se.m3u8"
+      "path": "releases/20261127T115135Z/playlists/rakuten-tv-se.m3u8"
     },
     {
       "id": "rakuten-tv-de",
@@ -254,7 +254,7 @@
       "channelCount": 158,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/rakuten-tv-de.m3u8"
+      "path": "releases/20261127T115135Z/playlists/rakuten-tv-de.m3u8"
     },
     {
       "id": "lg-channels-se",
@@ -264,7 +264,7 @@
       "channelCount": 203,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/lg-channels-se.m3u8"
+      "path": "releases/20261127T115135Z/playlists/lg-channels-se.m3u8"
     },
     {
       "id": "lg-channels-gb",
@@ -274,7 +274,7 @@
       "channelCount": 323,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/lg-channels-gb.m3u8"
+      "path": "releases/20261127T115135Z/playlists/lg-channels-gb.m3u8"
     },
     {
       "id": "samsung-nordics-dk",
@@ -284,7 +284,7 @@
       "channelCount": 20,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/samsung-nordics-dk.m3u8"
+      "path": "releases/20261127T115135Z/playlists/samsung-nordics-dk.m3u8"
     },
     {
       "id": "samsung-nordics-fi",
@@ -294,7 +294,7 @@
       "channelCount": 19,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/samsung-nordics-fi.m3u8"
+      "path": "releases/20261127T115135Z/playlists/samsung-nordics-fi.m3u8"
     },
     {
       "id": "orphanedfilms-vod",
@@ -304,7 +304,7 @@
       "channelCount": 1394,
       "status": "healthy",
       "dataState": "fresh",
-      "path": "releases/20261126T120029Z/playlists/orphanedfilms-vod.m3u8"
+      "path": "releases/20261127T115135Z/playlists/orphanedfilms-vod.m3u8"
     },
     {
       "id": "freemoviesplus",
@@ -314,7 +314,7 @@
       "channelCount": 17,
       "status": "failed",
       "dataState": "retained_last_good",
-      "path": "releases/20261126T120029Z/playlists/freemoviesplus.m3u8"
+      "path": "releases/20261127T115135Z/playlists/freemoviesplus.m3u8"
     }
   ]
 }
